@@ -17,7 +17,6 @@ import enum
 
 
 # Типы данных для колонок
-# Использование Annotated позволяет добавить метаданные к типам
 int_pk = Annotated[int, mapped_column(primary_key=True)]
 user_fk = Annotated[int, mapped_column(ForeignKey("users.id", ondelete="CASCADE"))]
 created_at = Annotated[datetime.datetime, mapped_column(server_default=text("TIMEZONE('utc', now())"))]
@@ -50,6 +49,8 @@ class User(Base):
     balance: Mapped[float] = mapped_column(Float, default=0.0)
     subscribed: Mapped[bool] = mapped_column(default=False)
     registered_at: Mapped[created_at]
+    # --- НОВОЕ ПОЛЕ ---
+    is_banned: Mapped[bool] = mapped_column(default=False, server_default="false", index=True)
 
     # Связи для удобного доступа к связанным данным
     videos: Mapped[list["Video"]] = relationship(back_populates="user")

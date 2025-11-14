@@ -1,5 +1,3 @@
-# bot/main.py
-
 import asyncio
 import logging
 import sys
@@ -15,7 +13,8 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from bot.config import config
 from bot.db.models import Base
 from bot.middlewares.db_session import DbSessionMiddleware
-# Импортируем только ГЛАВНЫЕ роутеры
+# --- ИМПОРТИРУЕМ НОВЫЙ MIDDLEWARE ---
+from bot.middlewares.ban_check import BanCheckMiddleware
 from bot.handlers.admin_handlers import admin_router
 from bot.handlers.user_handlers import user_router
 
@@ -48,14 +47,17 @@ def main() -> None:
     bot = Bot(token=config.bot_token.get_secret_value(), parse_mode=ParseMode.HTML)
     dp = Dispatcher()
 
+
     dp.update.middleware(DbSessionMiddleware(session_pool=session_maker))
 
+    user_router.message.middleware(BanCheckMiddleware())
+    user_router.callback_query.middleware(BanCheckMiddleware())
+    
     dp.startup.register(partial(on_startup, engine=engine))
     dp.shutdown.register(on_shutdown)
-
-    # --- ИЗМЕНЕНИЕ: Регистрируем только главные роутеры ---
+    
     dp.include_router(admin_router)
-    dp.include_router(user_router) # user_router уже содержит в себе throttled_router
+    dp.include_router(user_router)
     
     app = web.Application()
     

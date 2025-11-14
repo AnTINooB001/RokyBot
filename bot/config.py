@@ -26,9 +26,13 @@ class Settings(BaseSettings):
     admin_ids_str: str = Field(alias="ADMIN_IDS")
     channel_id: str
 
-    # --- Payouts (НОВЫЕ ПОЛЯ) ---
+    # --- Payouts ---
     wallet_mnemonic: SecretStr
     min_payout_amount: float
+    
+    # --- НОВЫЕ ПОЛЯ ДЛЯ ВИДЕО ---
+    # Ожидается строка с путями, разделенными запятой, например: "media/video1.mp4,media/video2.mp4"
+    video_paths_str: str = Field(alias="VIDEO_PATHS", default="")
 
     @property
     def admin_ids(self) -> list[int]:
@@ -47,6 +51,13 @@ class Settings(BaseSettings):
     @property
     def webhook_url(self) -> str:
         return f"{self.webhook_domain}{self.webhook_path}"
+        
+    @property
+    def video_paths(self) -> list[str]:
+        """Парсит строку с путями в список."""
+        if self.video_paths_str:
+            return [path.strip() for path in self.video_paths_str.split(',')]
+        return []
 
     model_config = SettingsConfigDict(
         env_file=".env",

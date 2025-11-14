@@ -38,6 +38,14 @@ class Repository:
         stmt = update(User).where(User.id == user_id).values(balance=User.balance + amount)
         await self.session.execute(stmt)
 
+    async def ban_user(self, user_id: int) -> None:
+        stmt = update(User).where(User.id == user_id).values(is_banned=True)
+        await self.session.execute(stmt)
+
+    async def unban_user(self, user_id: int) -> None:
+        stmt = update(User).where(User.id == user_id).values(is_banned=False)
+        await self.session.execute(stmt)
+
     # --- Методы для работы с видео (Video) ---
 
     async def add_video_to_queue(self, user_id: int, link: str) -> Video:
@@ -115,7 +123,7 @@ class Repository:
         
         return payout
 
-    # --- МЕТОДЫ ДЛЯ СТАТИСТИКИ (БЫЛИ ПОТЕРЯНЫ, ТЕПЕРЬ ВОЗВРАЩЕНЫ) ---
+    # --- МЕТОДЫ ДЛЯ СТАТИСТИКИ ---
     async def count_videos_on_review(self, user_id: int) -> int:
         query = select(func.count(Video.id)).where(Video.user_id == user_id)
         result = await self.session.execute(query)
@@ -141,6 +149,24 @@ class Repository:
             "total_processed_videos": total_processed_videos or 0,
             "total_paid_amount": total_paid_amount or 0.0,
         }
+    
+    # --- НОВЫЙ МЕТОД ---
+    async def get_admin_stats(self, admin_tg_id: int) -> Dict[str, Any]:
+        """Получает статистику по конкретному администратору."""
+        videos_processed_query = select(func.count(VideoHistory.id)).where(VideoHistory.admin_tg_id == admin_tg_id)
+        payouts_confirmed_query = select(func.count(Payout.id)).where(
+            Payout.admin_tg_id == admin_tg_id,
+            Payout.status == PayoutStatus.PAID
+        )
+
+        videos_processed = await self.session.scalar(videos_processed_query)
+        payouts_confirmed = await self.session.scalar(payouts_confirmed_query)
+        
+        return {
+            "videos_processed": videos_processed or 0,
+            "payouts_confirmed": payouts_confirmed or 0,
+        }
+    # ------------------
     
     async def has_pending_payout(self, user_id: int) -> bool:
         """Проверяет, есть ли у пользователя активная заявка на вывод."""

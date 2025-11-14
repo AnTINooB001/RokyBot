@@ -22,3 +22,4 @@ pytoniq
 # API для получения курса валют
 pycoingecko==3.1.0
 cachetools
+alembic
