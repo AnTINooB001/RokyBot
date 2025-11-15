@@ -1,0 +1,27 @@
+# Основной фреймворк для бота
+aiogram==3.2.0
+
+# Веб-сервер для вебхуков
+aiohttp==3.9.1
+
+# Конфигурация и переменные окружения
+pydantic-settings==2.1.0
+
+# ORM для работы с базой данных
+SQLAlchemy==2.0.23
+
+# Alembic для миграций БД
+alembic==1.13.1
+
+# Библиотека для работы с TON
+pytoniq==0.1.42
+
+# API для получения курса валют
+pycoingecko==3.1.0
+
+# Используется в Throttling Middleware
+cachetools==6.2.1
+
+aiosqlite==0.19.0
+
+#cringe

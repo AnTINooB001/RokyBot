@@ -1,0 +1,34 @@
+# .dockerignore
+
+# Исключаем директорию Git
+.git
+.gitignore
+
+# Исключаем настройки IDE
+.idea/
+.vscode/
+
+# Исключаем виртуальное окружение Python
+.venv/
+venv/
+env/
+
+# Исключаем кэш Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Исключаем файлы базы данных SQLite.
+# Они должны храниться в volume, а не внутри образа!
+*.db
+*.db-journal*
+*.sqlite
+*.sqlite3
+
+# Исключаем файлы Docker, чтобы они не копировались сами в себя
+Dockerfile
+docker-compose.yml
+
+# Другие ненужные файлы
+*.log
+.env

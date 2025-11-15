@@ -1,0 +1,19 @@
+# docker-compose.yml
+
+services:
+  bot:
+    build: .
+    container_name: roky_bot
+    restart: always
+    ports:
+      - "8081:8081"
+    env_file:
+      - .env
+    volumes:
+      # ИСПРАВЛЕНИЕ: Монтируем volume в отдельную папку /app/data.
+      # Теперь код в /app и данные в /app/data полностью изолированы.
+      - db_data:/app/data
+
+volumes:
+  # Наше хранилище для данных остается без изменений.
+  db_data:
