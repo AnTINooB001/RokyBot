@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os  # <-- ДОБАВЛЕН ИМПОРТ
 import sys
 from functools import partial
 
@@ -19,7 +20,6 @@ from bot.handlers.admin_handlers import admin_router
 from bot.handlers.user_handlers import user_router
 
 
-
 async def on_startup(bot: Bot, engine) -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -29,8 +29,7 @@ async def on_startup(bot: Bot, engine) -> None:
     await bot.set_webhook(
         url=config.webhook_url,
         secret_token=config.webhook_secret.get_secret_value()
-        )
-
+    )
     logging.info("Webhook has been set. Pending updates dropped.")
 
 
@@ -46,6 +45,10 @@ def main() -> None:
         stream=sys.stdout,
     )
 
+    # ПРОГРАММНОЕ СОЗДАНИЕ ДИРЕКТОРИИ ДЛЯ БД
+    # Это гарантирует ее существование перед подключением.
+    os.makedirs('data', exist_ok=True)
+
     engine = create_async_engine(
         config.database_url,
         echo=False
@@ -53,18 +56,11 @@ def main() -> None:
     
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
 
-    # Создаем клиент Redis и хранилище FSM на его основе
-    #redis_client = Redis(host=config.redis_host, port=config.redis_port, db=0)
-    #storage = RedisStorage(redis=redis_client)
-    
     bot = Bot(token=config.bot_token.get_secret_value(), parse_mode=ParseMode.HTML)
-    # Передаем storage в Dispatcher при его создании
     dp = Dispatcher()
     
-    # Прокидываем фабрику сессий в хендлеры
     dp["session_maker"] = session_maker
 
-    # Регистрируем middleware для проверки бана
     user_router.message.middleware(BanCheckMiddleware())
     user_router.callback_query.middleware(BanCheckMiddleware())
     
