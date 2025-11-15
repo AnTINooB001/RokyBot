@@ -11,16 +11,20 @@ from sqlalchemy import (
     text,
     Float,
     Enum as PgEnum,
+    func # <-- Импортируем func
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 import enum
 
 
-# Типы данных для колонок
+# --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
+# Убираем специфичный для PostgreSQL server_default
+# Вместо этого используем `default=func.now()`, который SQLAlchemy
+# корректно транслирует в `CURRENT_TIMESTAMP` для SQLite и `now()` для PostgreSQL.
 int_pk = Annotated[int, mapped_column(primary_key=True)]
 user_fk = Annotated[int, mapped_column(ForeignKey("users.id", ondelete="CASCADE"))]
-created_at = Annotated[datetime.datetime, mapped_column(server_default=text("TIMEZONE('utc', now())"))]
-processed_at = Annotated[datetime.datetime, mapped_column(nullable=True, onupdate=datetime.datetime.utcnow)]
+created_at = Annotated[datetime.datetime, mapped_column(default=func.now())]
+processed_at = Annotated[datetime.datetime, mapped_column(nullable=True, onupdate=func.now())]
 
 
 class Base(DeclarativeBase):
@@ -48,11 +52,10 @@ class User(Base):
     wallet: Mapped[str | None]
     balance: Mapped[float] = mapped_column(Float, default=0.0)
     subscribed: Mapped[bool] = mapped_column(default=False)
-    registered_at: Mapped[created_at]
-    # --- НОВОЕ ПОЛЕ ---
+    # Применяем наш новый, совместимый тип
+    registered_at: Mapped[created_at] 
     is_banned: Mapped[bool] = mapped_column(default=False, server_default="false", index=True)
 
-    # Связи для удобного доступа к связанным данным
     videos: Mapped[list["Video"]] = relationship(back_populates="user")
     video_history: Mapped[list["VideoHistory"]] = relationship(back_populates="user")
     payouts: Mapped[list["Payout"]] = relationship(back_populates="user")
@@ -64,6 +67,7 @@ class Video(Base):
     id: Mapped[int_pk]
     user_id: Mapped[user_fk]
     link: Mapped[str]
+    # Применяем наш новый, совместимый тип
     created_at: Mapped[created_at]
 
     user: Mapped["User"] = relationship(back_populates="videos")
@@ -78,7 +82,7 @@ class VideoHistory(Base):
     status: Mapped[VideoStatus] = mapped_column(PgEnum(VideoStatus, name="video_status_enum"))
     reason: Mapped[str | None]
     admin_tg_id: Mapped[int] = mapped_column(BigInteger)
-    created_at: Mapped[datetime.datetime] # Дата отправки пользователем
+    created_at: Mapped[datetime.datetime]
     processed_at: Mapped[processed_at]
 
     user: Mapped["User"] = relationship(back_populates="video_history")
@@ -98,6 +102,7 @@ class Payout(Base):
     )
     admin_tg_id: Mapped[int | None] = mapped_column(BigInteger)
     tx_hash: Mapped[str | None]
+    # Применяем наш новый, совместимый тип
     created_at: Mapped[created_at]
     processed_at: Mapped[processed_at]
 

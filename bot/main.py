@@ -1,3 +1,5 @@
+# bot/main.py
+
 import asyncio
 import logging
 import sys
@@ -5,15 +7,15 @@ from functools import partial
 
 from aiohttp import web
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from redis.asyncio import Redis
 
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiogram.fsm.storage.redis import RedisStorage
 
 from bot.config import config
 from bot.db.models import Base
-from bot.middlewares.db_session import DbSessionMiddleware
-# --- ИМПОРТИРУЕМ НОВЫЙ MIDDLEWARE ---
 from bot.middlewares.ban_check import BanCheckMiddleware
 from bot.handlers.admin_handlers import admin_router
 from bot.handlers.user_handlers import user_router
@@ -22,11 +24,14 @@ from bot.handlers.user_handlers import user_router
 async def on_startup(bot: Bot, engine) -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    
+    await bot.delete_webhook(drop_pending_updates=True)
+    
     await bot.set_webhook(
         url=config.webhook_url,
         secret_token=config.webhook_secret
     )
-    logging.info("Webhook has been set. Database tables created.")
+    logging.info("Webhook has been set. Pending updates dropped.")
 
 
 async def on_shutdown(bot: Bot) -> None:
@@ -41,15 +46,29 @@ def main() -> None:
         stream=sys.stdout,
     )
 
-    engine = create_async_engine(config.database_url, echo=False)
+    engine = create_async_engine(
+        config.database_url,
+        echo=False,
+        pool_size=20,
+        max_overflow=10,
+        pool_timeout=30,
+        pool_recycle=3600
+    )
+    
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
 
+    # Создаем клиент Redis и хранилище FSM на его основе
+    redis_client = Redis(host=config.redis_host, port=config.redis_port, db=0)
+    storage = RedisStorage(redis=redis_client)
+    
     bot = Bot(token=config.bot_token.get_secret_value(), parse_mode=ParseMode.HTML)
-    dp = Dispatcher()
+    # Передаем storage в Dispatcher при его создании
+    dp = Dispatcher(storage=storage)
+    
+    # Прокидываем фабрику сессий в хендлеры
+    dp["session_maker"] = session_maker
 
-
-    dp.update.middleware(DbSessionMiddleware(session_pool=session_maker))
-
+    # Регистрируем middleware для проверки бана
     user_router.message.middleware(BanCheckMiddleware())
     user_router.callback_query.middleware(BanCheckMiddleware())
     

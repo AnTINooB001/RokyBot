@@ -1,35 +1,51 @@
-version: '3.8'
+# Уберем эту строку, она устарела и вызывает предупреждение
+# version: '3.8'
 
 services:
-  # Сервис базы данных PostgreSQL
   db:
-    image: postgres:15-alpine  # Используем легкий официальный образ PostgreSQL
+    image: postgres:15-alpine
     container_name: rocky_db
     environment:
-      # Эти переменные должны СОВПАДАТЬ с переменными в вашем .env файле
       POSTGRES_DB: ${DB_NAME}
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASS}
     volumes:
-      - postgres_data:/var/lib/postgresql/data  # Сохраняем данные БД на хост-машине
-    restart: always # Всегда перезапускать, если контейнер упал
+      - postgres_data:/var/lib/postgresql/data
+    restart: always
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # Сервис нашего бота
+  redis:
+    image: redis:7-alpine
+    container_name: rocky_redis
+    restart: always
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   bot:
-    build: .  # Собирать образ из Dockerfile в текущей директории
+    build: .
     container_name: rocky_bot
     env_file:
-      - .env  # Прокидываем все переменные из .env файла в контейнер
+      - .env
+    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+    ports:
+      - "${WEBAPP_PORT}:${WEBAPP_PORT}"
+    # --------------------------
     depends_on:
       db:
-        condition: service_healthy # Запускать бота только после того, как БД будет готова
-    restart: always # Всегда перезапускать, если бот упал
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: always
 
 volumes:
-  # Определяем том для хранения данных PostgreSQL
   postgres_data:
+  redis_data:

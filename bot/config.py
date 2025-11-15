@@ -30,9 +30,12 @@ class Settings(BaseSettings):
     wallet_mnemonic: SecretStr
     min_payout_amount: float
     
-    # --- НОВЫЕ ПОЛЯ ДЛЯ ВИДЕО ---
-    # Ожидается строка с путями, разделенными запятой, например: "media/video1.mp4,media/video2.mp4"
-    video_paths_str: str = Field(alias="VIDEO_PATHS", default="")
+    # --- Registration Videos ---
+    registration_videos_file_ids_str: str = Field(alias="REG_VIDEO_IDS", default="")
+
+    # --- Redis ---
+    redis_host: str = "localhost"
+    redis_port: int = 6379
 
     @property
     def admin_ids(self) -> list[int]:
@@ -53,10 +56,10 @@ class Settings(BaseSettings):
         return f"{self.webhook_domain}{self.webhook_path}"
         
     @property
-    def video_paths(self) -> list[str]:
-        """Парсит строку с путями в список."""
-        if self.video_paths_str:
-            return [path.strip() for path in self.video_paths_str.split(',')]
+    def registration_videos(self) -> list[str]:
+        """Парсит строку с file_id в список."""
+        if self.registration_videos_file_ids_str:
+            return [file_id.strip() for file_id in self.registration_videos_file_ids_str.split(',')]
         return []
 
     model_config = SettingsConfigDict(

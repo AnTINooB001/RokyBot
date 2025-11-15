@@ -3,7 +3,9 @@
 from typing import Callable, Dict, Any, Awaitable
 
 from aiogram import BaseMiddleware
-from aiogram.types import TelegramObject, Message
+# --- ИЗМЕНЕНИЕ ---
+# Импортируем Message и CallbackQuery, чтобы проверять оба
+from aiogram.types import TelegramObject, Message, CallbackQuery
 
 from bot.config import config
 
@@ -17,15 +19,26 @@ class AdminCheckMiddleware(BaseMiddleware):
     ) -> Any:
         """
         Проверяет, является ли пользователь администратором.
-        Работает только для типа Message, чтобы не блокировать callback-запросы
-        от админов, которые уже вошли в панель.
+        Работает и для Message, и для CallbackQuery.
         """
-        # Убеждаемся, что event - это Message и у него есть from_user
+        
+        # --- ИЗМЕНЕНИЕ ---
+        # Мы будем искать user_id и в сообщениях, и в нажатиях на кнопки
+        user_id: int | None = None
+        
         if isinstance(event, Message) and event.from_user:
             user_id = event.from_user.id
-            # Если ID пользователя нет в списке админов, прекращаем обработку
-            if user_id not in config.admin_ids:
-                return
+        elif isinstance(event, CallbackQuery) and event.from_user:
+            user_id = event.from_user.id
+
+        # Если мы не смогли определить пользователя (не тот тип события)
+        # ИЛИ пользователь не в списке админов
+        if user_id is None or user_id not in config.admin_ids:
+            # Если это нажатие кнопки, вежливо ответим, чтобы она "отвисла"
+            if isinstance(event, CallbackQuery):
+                await event.answer("У вас нет прав для этого действия.", show_alert=True)
+            # Прекращаем обработку
+            return
         
-        # Если проверка пройдена или событие не Message, вызываем следующий обработчик
+        # Если проверка пройдена, вызываем следующий обработчик
         return await handler(event, data)

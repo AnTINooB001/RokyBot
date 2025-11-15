@@ -5,8 +5,10 @@ from typing import Callable, Dict, Any, Awaitable
 
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from bot.db.repository import Repository
+
 
 class BanCheckMiddleware(BaseMiddleware):
     async def __call__(
@@ -17,23 +19,29 @@ class BanCheckMiddleware(BaseMiddleware):
     ) -> Any:
         """
         Проверяет, заблокирован ли пользователь.
-        Если да, то просто прекращает обработку события.
+        Самостоятельно создает КОРОТКОЖИВУЩУЮ сессию для проверки.
         """
-        # Получаем пользователя из данных, которые aiogram любезно предоставляет
         user = data.get("event_from_user")
+        session_maker: async_sessionmaker = data.get("session_maker")
         
-        # Если это событие не от пользователя, или нет репозитория - пропускаем
-        if not user or "repo" not in data:
+        # Если это событие не от пользователя, или нет фабрики сессий - пропускаем
+        if not user or not session_maker:
             return await handler(event, data)
-            
-        repo: Repository = data["repo"]
-        db_user = await repo.get_user_by_tg_id(user.id)
         
-        # Если пользователь есть в БД и он забанен
-        if db_user and db_user.is_banned:
+        is_banned = False
+        # --- ОТКРЫЛ БАЗУ ---
+        async with session_maker() as session:
+            repo = Repository(session)
+            db_user = await repo.get_user_by_tg_id(user.id)
+            if db_user and db_user.is_banned:
+                is_banned = True
+        # --- СРАЗУ ЖЕ ЗАКРЫЛ БАЗУ ---
+        
+        if is_banned:
             logging.info(f"Ignoring update from banned user {user.id}")
-            # Просто возвращаем None, чтобы остановить цепочку обработки
             return
         
-        # Если все в порядке, вызываем следующий обработчик
+        # Если пользователь не забанен, просто вызываем следующий обработчик.
+        # Этот следующий обработчик (например, start_handler) уже сам откроет
+        # СВОЕ СОБСТВЕННОЕ, НОВОЕ соединение, когда оно ему понадобится.
         return await handler(event, data)
