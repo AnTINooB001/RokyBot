@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     # --- Database (SQLite) ---
     # Путь к файлу базы данных SQLite
-    db_path: str = "data/bot.db"
+    db_path: str = "../data/bot.db"
 
     # --- Admin and Channel ---
     admin_ids_str: str = Field(alias="ADMIN_IDS")
