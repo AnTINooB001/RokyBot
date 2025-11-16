@@ -151,7 +151,7 @@ async def check_subscription_callback_handler(callback: CallbackQuery, bot: Bot)
             
             await bot.send_message(
                 callback.from_user.id,
-                texts['registration']['full_intro_and_rules'],
+                texts['registration']['full_intro_and_rules'].format(payout_per_video=config.payout_per_video),
                 reply_markup=kb.get_understood_keyboard()
             )
 

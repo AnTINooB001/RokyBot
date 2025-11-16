@@ -21,11 +21,14 @@ from bot.middlewares.admin_check import AdminCheckMiddleware
 from bot.services.coingecko_service import coingecko_service
 from bot.services.ton_service import ton_service
 from bot.db.models import Payout, PayoutStatus
+from bot.config import config
 
 # --- Global variables & setup ---
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 with open(BASE_DIR / 'texts.json', 'r', encoding='utf-8') as f:
     texts = json.load(f)
+
+MONEY_PER_VIDEO = 0.5
 
 # --- FSM States ---
 class VideoRejection(StatesGroup):
@@ -110,25 +113,27 @@ async def get_video_for_review_handler(callback: CallbackQuery, session_maker: a
     )
     await callback.answer()
 
+
+
 @admin_router.callback_query(kb.VideoReviewCallback.filter(F.action == "accept"))
 async def accept_video_handler(callback: CallbackQuery, callback_data: kb.VideoReviewCallback, bot: Bot, session_maker: async_sessionmaker):
     user_tg_id = 0
     async with session_maker() as session:
         repo = Repository(session)
         try:
-            processed_video = await repo.process_video_acceptance(video_id=callback_data.video_id, admin_tg_id=callback.from_user.id, amount=0.10)
+            processed_video = await repo.process_video_acceptance(video_id=callback_data.video_id, admin_tg_id=callback.from_user.id, amount=config.payout_per_video)
             user_tg_id = processed_video.user.tg_id
             await session.commit()
         except ValueError:
             await callback.answer(texts['admin_panel']['error_already_processed'], show_alert=True)
             return
     
-    await callback.answer(texts['admin_panel']['video_accepted'].format(amount=0.10), show_alert=False)
+    await callback.answer(texts['admin_panel']['video_accepted'].format(amount=config.payout_per_video), show_alert=False)
     await show_admin_panel(bot, callback.message.chat.id, session_maker, callback.message.message_id)
 
     if user_tg_id:
         try:
-            await bot.send_message(user_tg_id, texts['user_notifications']['video_accepted'].format(amount=0.10))
+            await bot.send_message(user_tg_id, texts['user_notifications']['video_accepted'].format(amount=config.payout_per_video))
         except Exception as e:
             await bot.send_message(callback.from_user.id, texts['admin_panel']['error_notify_user_alert'].format(error=e))
         

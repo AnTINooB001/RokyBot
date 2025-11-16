@@ -26,9 +26,12 @@ class Settings(BaseSettings):
     # --- Payouts ---
     wallet_mnemonic: SecretStr
     min_payout_amount: float
+    payout_per_video: float
     
     # --- Registration Videos ---
     registration_videos_file_ids_str: str = Field(alias="REG_VIDEO_IDS", default="")
+
+    
 
     @property
     def admin_ids(self) -> list[int]:

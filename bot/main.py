@@ -47,7 +47,7 @@ def main() -> None:
 
     # ПРОГРАММНОЕ СОЗДАНИЕ ДИРЕКТОРИИ ДЛЯ БД
     # Это гарантирует ее существование перед подключением.
-    os.makedirs('data', exist_ok=True)
+    #os.makedirs('../data', exist_ok=True)
 
     engine = create_async_engine(
         config.database_url,

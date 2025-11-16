@@ -12,7 +12,7 @@ services:
     volumes:
       # ИСПРАВЛЕНИЕ: Монтируем volume в отдельную папку /app/data.
       # Теперь код в /app и данные в /app/data полностью изолированы.
-      - db_data:/app/data
+      - db_data:/data
 
 volumes:
   # Наше хранилище для данных остается без изменений.
