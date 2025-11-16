@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     webhook_domain: str
     webhook_path: str = "/webhook"
     webapp_port: int = 8081
-    webapp_host: str = "0.0.0.0"
+    webapp_host: str = ""
 
     # --- Database (SQLite) ---
     # Путь к файлу базы данных SQLite
