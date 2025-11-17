@@ -218,11 +218,11 @@ async def wallet_handler(message: Message, state: FSMContext, bot: Bot, session_
             
         await state.clear()
 
-        if prompt_message_id:
-            try:
-                await bot.delete_message(message.chat.id, prompt_message_id)
-            except TelegramBadRequest:
-                pass
+        # if prompt_message_id:
+        #     try:
+        #         await bot.delete_message(message.chat.id, prompt_message_id)
+        #     except TelegramBadRequest:
+        #         pass
 
         final_text = texts['registration']['wallet_saved'] + "\n\n" + texts['user_panel']['main_menu_text']
         await show_main_menu(bot, message.chat.id, text=final_text)

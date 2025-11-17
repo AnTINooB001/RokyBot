@@ -2,6 +2,7 @@
 
 from pydantic import SecretStr, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+import logging
 
 
 class Settings(BaseSettings):
@@ -29,6 +30,7 @@ class Settings(BaseSettings):
     # --- Payouts ---
     wallet_mnemonic: SecretStr
     min_payout_amount: float
+    payout_per_video: float
     
     # --- Registration Videos ---
     registration_videos_file_ids_str: str = Field(alias="REG_VIDEO_IDS", default="")
@@ -64,3 +66,4 @@ class Settings(BaseSettings):
     )
 
 config = Settings()
+logging.info(f"password: {config.amvera_pg_password.get_secret_value()}")
