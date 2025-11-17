@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-import os  # <-- ДОБАВЛЕН ИМПОРТ
+import os
 import sys
 from functools import partial
 
@@ -45,13 +45,12 @@ def main() -> None:
         stream=sys.stdout,
     )
 
-    # ПРОГРАММНОЕ СОЗДАНИЕ ДИРЕКТОРИИ ДЛЯ БД
-    # Это гарантирует ее существование перед подключением.
-    #os.makedirs('../data', exist_ok=True)
-
+    # ВОЗВРАЩАЕМ НАСТРОЙКИ ПУЛА СОЕДИНЕНИЙ ДЛЯ POSTGRESQL
     engine = create_async_engine(
         config.database_url,
-        echo=False
+        echo=False,
+        pool_size=20,
+        max_overflow=10
     )
     
     session_maker = async_sessionmaker(engine, expire_on_commit=False)

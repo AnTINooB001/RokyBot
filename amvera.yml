@@ -1,0 +1,12 @@
+# amvera.yml
+
+meta:
+  application: rokytgbot # Убедитесь, что имя совпадает с вашим проектом
+  environment: docker
+
+run:
+  # Нам больше не нужно постоянное хранилище (persistenceMount/volumes)
+  # Указываем только порт, который слушает наш бот
+  containerPort: 8081
+  # И делаем его доступным для интернета
+  servicePort: "8081"
