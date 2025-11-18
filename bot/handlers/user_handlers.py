@@ -17,6 +17,9 @@ from bot.config import config
 from bot.db.repository import Repository
 from bot.keyboards import user_keyboards as kb
 from bot.middlewares.throttling import RateLimiterMiddleware
+from bot.filters.admin_filter import IsAdmin, IsSuperAdmin
+
+
 
 # --- Global variables & setup ---
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -30,6 +33,11 @@ throttled_router.message.middleware(RateLimiterMiddleware(limit=10, period=3600)
 user_router.include_router(throttled_router)
 
 
+user_router.message.filter(~IsAdmin())
+user_router.callback_query.filter(~IsAdmin())
+
+
+
 # --- FSM States ---
 class Registration(StatesGroup):
     waiting_for_wallet = State()
@@ -41,6 +49,7 @@ class VideoSubmission(StatesGroup):
 
 class ProfileUpdate(StatesGroup):
     waiting_for_new_wallet = State()
+
 
 
 # --- Helper Functions ---

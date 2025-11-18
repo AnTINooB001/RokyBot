@@ -14,14 +14,14 @@ from aiogram.exceptions import TelegramBadRequest
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.orm import selectinload
 
-from bot.db.models import User
+from bot.db.models import User, Payout, PayoutStatus
 from bot.db.repository import Repository
 from bot.keyboards import admin_keyboards as kb
 from bot.middlewares.admin_check import AdminCheckMiddleware
 from bot.services.coingecko_service import coingecko_service
 from bot.services.ton_service import ton_service
-from bot.db.models import Payout, PayoutStatus
 from bot.config import config
+from bot.filters.admin_filter import IsAdmin, IsSuperAdmin
 
 # --- Global variables & setup ---
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -42,8 +42,9 @@ class VideoInProcess(StatesGroup):
     waiting_video_process = State()
 
 admin_router = Router()
-admin_router.message.middleware(AdminCheckMiddleware())
-admin_router.callback_query.middleware(AdminCheckMiddleware())
+admin_router.message.filter(IsAdmin())
+admin_router.callback_query.filter(IsAdmin())
+
 
 
 # --- Helper Function for Admin Panel ---
@@ -51,18 +52,31 @@ async def show_admin_panel(bot: Bot, chat_id: int, session_maker: async_sessionm
     """Отправляет или редактирует сообщение, показывая главную админ-панель."""
     queue_count = 0
     payout_count = 0
+    
+    # --- ПРОВЕРКА НА СУПЕР-АДМИНА ---
+    # chat_id в личных сообщениях совпадает с user_id
+    is_super_admin = chat_id in config.super_admin_ids
+
+    text = texts['admin_panel']['welcome']
+
     async with session_maker() as session:
         repo = Repository(session)
         queue_count = await repo.get_queue_count()
-        payout_count = await repo.get_pending_payouts_count()
-
-    text = texts['admin_panel']['welcome']
-    reply_markup = kb.get_admin_main_menu(queue_count=queue_count, payout_count=payout_count)
+        # Запрашиваем количество выплат только если это супер-админ
+        if is_super_admin:
+            payout_count = await repo.get_pending_payouts_count()
+            text = texts['super_admin_panel']['welcome']
+    
+    
+    # Передаем флаг is_super_admin в генератор клавиатуры
+    reply_markup = kb.get_admin_main_menu(
+        queue_count=queue_count, 
+        payout_count=payout_count, 
+        is_super_admin=is_super_admin
+    )
     
     if message_id:
         try:
-            # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
-            # Мы используем именованные аргументы, чтобы избежать путаницы
             await bot.edit_message_text(
                 text=text,
                 chat_id=chat_id,
@@ -71,14 +85,13 @@ async def show_admin_panel(bot: Bot, chat_id: int, session_maker: async_sessionm
                 disable_web_page_preview=True
             )
         except TelegramBadRequest:
-            # Если сообщение не изменилось или было удалено, просто отправляем новое
             await bot.send_message(chat_id, text, reply_markup=reply_markup)
     else:
         await bot.send_message(chat_id, text, reply_markup=reply_markup)
 
 
 # --- Main Panel Navigation ---
-@admin_router.message(Command("admin"))
+@admin_router.message(Command("start"))
 async def admin_panel_handler(message: Message, bot: Bot, session_maker: async_sessionmaker):
     await message.delete()
     await show_admin_panel(bot, message.chat.id, session_maker)
@@ -97,12 +110,22 @@ async def get_video_for_review_handler(callback: CallbackQuery, session_maker: a
     async with session_maker() as session:
         repo = Repository(session)
         video = await repo.get_oldest_video_from_queue()
+        # Сохраняем объект видео, чтобы потом взять из него данные
+        video_obj = video 
         if video:
             video_data = {"id": video.id, "link": video.link, "created_at": video.created_at, "username": video.user.username, "tg_id": video.user.tg_id}
 
     if not video_data:
         await callback.answer(texts['admin_panel']['queue_empty'], show_alert=True)
         return
+
+    # Сохраняем данные в FSM для последующей обработки (принятие/отклонение)
+    await state.set_state(VideoInProcess.waiting_video_process)
+    await state.update_data(
+        video_id=video_data['id'],
+        video_link=video_data['link'],
+        user_tg_id=video_data['tg_id']
+    )
 
     username = f"@{video_data['username']}" if video_data['username'] else f"ID: {video_data['tg_id']}"
     review_text = texts['admin_panel']['review_request'].format(
@@ -114,26 +137,34 @@ async def get_video_for_review_handler(callback: CallbackQuery, session_maker: a
         reply_markup=kb.get_video_review_keyboard(video_id=video_data['id']), 
         disable_web_page_preview=True
     )
-
-    await state.update_data(video_link=video.link)
-    await state.set_state(State(VideoInProcess.waiting_video_process))
     await callback.answer()
 
 
-#TODO
 @admin_router.callback_query(kb.VideoReviewCallback.filter(F.action == "accept"))
 async def accept_video_handler(callback: CallbackQuery, callback_data: kb.VideoReviewCallback, bot: Bot, session_maker: async_sessionmaker, state :FSMContext):
-    user_tg_id = 0
+    # Получаем данные из состояния
     data = await state.get_data()
+    video_id = data.get("video_id")
     video_link = data.get("video_link")
+    user_tg_id = data.get("user_tg_id")
+    
+    # Проверка состояния
+    current_state = await state.get_state()
+    if not video_id or current_state != VideoInProcess.waiting_video_process:
+        await callback.answer("Ошибка состояния. Начните проверку заново.", show_alert=True)
+        return
+
+    await state.clear()
+    
     async with session_maker() as session:
         repo = Repository(session)
         try:
-            processed_video = await repo.process_video_acceptance(video_id=callback_data.video_id, admin_tg_id=callback.from_user.id, amount=config.payout_per_video)
-            user_tg_id = processed_video.user.tg_id
+            # Используем ID из состояния, чтобы избежать подмены
+            await repo.process_video_acceptance(video_id=video_id, admin_tg_id=callback.from_user.id, amount=config.payout_per_video)
             await session.commit()
         except ValueError:
             await callback.answer(texts['admin_panel']['error_already_processed'], show_alert=True)
+            await show_admin_panel(bot, callback.message.chat.id, session_maker, callback.message.message_id)
             return
     
     await callback.answer(texts['admin_panel']['video_accepted'].format(amount=config.payout_per_video), show_alert=False)
@@ -145,30 +176,36 @@ async def accept_video_handler(callback: CallbackQuery, callback_data: kb.VideoR
         except Exception as e:
             await bot.send_message(callback.from_user.id, texts['admin_panel']['error_notify_user_alert'].format(error=e))
         
+
 @admin_router.callback_query(kb.VideoReviewCallback.filter(F.action == "reject"))
 async def reject_video_handler(callback: CallbackQuery, callback_data: kb.VideoReviewCallback, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state != VideoInProcess.waiting_video_process:
+        await callback.answer("Ошибка состояния. Начните проверку заново.", show_alert=True)
+        return
+
     await state.set_state(VideoRejection.waiting_for_reason)
-    await state.update_data(video_id=callback_data.video_id, original_message_id=callback.message.message_id)
+    await state.update_data(original_message_id=callback.message.message_id)
     await callback.message.edit_text(texts['admin_panel']['ask_for_rejection_reason'], reply_markup=kb.get_admin_cancel_keyboard())
     await callback.answer()
+
 
 @admin_router.message(VideoRejection.waiting_for_reason)
 async def rejection_reason_handler(message: Message, state: FSMContext, bot: Bot, session_maker: async_sessionmaker):
     data = await state.get_data()
     video_id = data.get("video_id")
+    video_link = data.get("video_link")
+    user_tg_id = data.get("user_tg_id")
     original_message_id = data.get("original_message_id")
     reason = message.text
-    video_link = data.get("video_link")
-    await state.clear()
     
+    await state.clear()
     await message.delete()
 
-    user_tg_id = 0
     async with session_maker() as session:
         repo = Repository(session)
         try:
-            processed_video = await repo.process_video_rejection(video_id=video_id, admin_tg_id=message.from_user.id, reason=reason)
-            user_tg_id = processed_video.user.tg_id
+            await repo.process_video_rejection(video_id=video_id, admin_tg_id=message.from_user.id, reason=reason)
             await session.commit()
         except ValueError:
             await bot.edit_message_text(chat_id=message.chat.id, message_id=original_message_id, text=texts['admin_panel']['error_already_processed'])
@@ -182,8 +219,10 @@ async def rejection_reason_handler(message: Message, state: FSMContext, bot: Bot
             await bot.send_message(message.from_user.id, texts['admin_panel']['error_notify_user_alert'].format(error=e))
 
 
-# --- Payout Logic ---
-@admin_router.callback_query(F.data == "get_payout_request")
+# --- Payout Logic (PROTECTED) ---
+
+# 1. Фильтр IsSuperAdmin защищает вход в меню выплат
+@admin_router.callback_query(F.data == "get_payout_request", IsSuperAdmin())
 async def get_payout_request_handler(callback: CallbackQuery, session_maker: async_sessionmaker):
     payout_data = None
     async with session_maker() as session:
@@ -201,27 +240,39 @@ async def get_payout_request_handler(callback: CallbackQuery, session_maker: asy
     await callback.message.edit_text(text, reply_markup=kb.get_payout_review_keyboard(payout_id=payout_data['id']))
     await callback.answer()
 
-@admin_router.callback_query(kb.PayoutCallback.filter(F.action == "confirm"))
+
+# 2. Фильтр IsSuperAdmin защищает подтверждение выплаты
+@admin_router.callback_query(kb.PayoutCallback.filter(F.action == "confirm"), IsSuperAdmin())
 async def confirm_payout_handler(callback: CallbackQuery, callback_data: kb.PayoutCallback, bot: Bot, session_maker: async_sessionmaker):
     payout_data = None
     async with session_maker() as session:
         repo = Repository(session)
+        # Используем get_payout_for_processing если он есть, или обычный get с options
         payout = await repo.session.get(Payout, callback_data.payout_id, options=[selectinload(Payout.user)])
+        
         if not payout or payout.status != PayoutStatus.PENDING:
             await callback.message.edit_text(texts['admin_panel']['error_already_processed'])
             await callback.answer()
             return
-        payout_data = {"wallet": payout.wallet, "amount": payout.amount, "user_tg_id": payout.user.tg_id}
+        payout_data = {"id": payout.id, "wallet": payout.wallet, "amount": payout.amount, "user_tg_id": payout.user.tg_id}
 
     await callback.message.edit_text(texts['admin_panel']['payout_processing'])
+    
+    # Получение курса с проверкой
     rate = coingecko_service.get_ton_to_usd_rate()
     if rate <= 0:
         await callback.message.edit_text(texts['admin_panel']['payout_error_api'])
         return
     
     amount_ton = payout_data['amount'] / rate
-    tx_hash = await ton_service.send_transaction(to_address=payout_data['wallet'], amount_ton=amount_ton, comment="Rocky Clips Payout")
     
+    # Отправка транзакции
+    tx_hash = None
+    try:
+        tx_hash = await ton_service.send_transaction(to_address=payout_data['wallet'], amount_ton=amount_ton, comment="Rocky Clips Payout")
+    except Exception as e:
+        logging.error(f"Payout error: {e}")
+
     user_to_notify_id = payout_data['user_tg_id']
     amount_to_notify = payout_data['amount']
 
@@ -231,7 +282,7 @@ async def confirm_payout_handler(callback: CallbackQuery, callback_data: kb.Payo
             await repo.confirm_payout(payout_id=callback_data.payout_id, admin_tg_id=callback.from_user.id, tx_hash=tx_hash)
             await session.commit()
         
-        await callback.answer(texts['admin_panel']['payout_confirmed_admin'].format(tx_hash=tx_hash), show_alert=True)
+        await callback.message.edit_text(texts['admin_panel']['payout_confirmed_admin'].format(tx_hash=tx_hash))
         try:
             await bot.send_message(user_to_notify_id, texts['user_notifications']['payout_confirmed_user'].format(amount=amount_to_notify, tx_hash=tx_hash))
         except Exception as e:
@@ -248,11 +299,12 @@ async def confirm_payout_handler(callback: CallbackQuery, callback_data: kb.Payo
         except Exception as e:
             await bot.send_message(callback.from_user.id, texts['admin_panel']['error_notify_user_alert'].format(error=e))
     
-    await asyncio.sleep(2)
+    await asyncio.sleep(3)
     await show_admin_panel(bot, callback.message.chat.id, session_maker, callback.message.message_id)
-    await callback.answer()
 
-@admin_router.callback_query(kb.PayoutCallback.filter(F.action == "cancel"))
+
+# 3. Фильтр IsSuperAdmin защищает отмену выплаты
+@admin_router.callback_query(kb.PayoutCallback.filter(F.action == "cancel"), IsSuperAdmin())
 async def cancel_payout_handler(callback: CallbackQuery, callback_data: kb.PayoutCallback, bot: Bot, session_maker: async_sessionmaker):
     user_tg_id = 0
     async with session_maker() as session:

@@ -62,6 +62,10 @@
     "user_already_banned": "⚠️ Пользователь {username} уже заблокирован.",
     "user_not_banned": "⚠️ Пользователь {username} не был заблокирован."
   },
+  "super_admin_panel":
+  {
+    "welcome":"Добро пожаловать в супер админ-панель!"
+  },
   "user_notifications": {
     "video_accepted": "✅ Твоё видео {video_link} одобрено! На баланс начислено {amount:.2f}$.",
     "video_rejected": "❌ Видео {video_link} отклонено.\n\n<b>Причина:</b> {reason}",

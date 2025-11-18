@@ -25,6 +25,7 @@ class Settings(BaseSettings):
 
     # --- Admin and Channel ---
     admin_ids_str: str = Field(alias="ADMIN_IDS")
+    super_admin_ids_str: str = Field(alias="SUPER_ADMIN_IDS", default="") 
     channel_id: str
 
     # --- Payouts ---
@@ -58,6 +59,12 @@ class Settings(BaseSettings):
     def registration_videos(self) -> list[str]:
         if self.registration_videos_file_ids_str:
             return [file_id.strip() for file_id in self.registration_videos_file_ids_str.split(',')]
+        return []
+    
+    @property
+    def super_admin_ids(self) -> list[int]:
+        if self.super_admin_ids_str:
+            return [int(id_.strip()) for id_ in self.super_admin_ids_str.split(',') if id_.strip()]
         return []
 
     model_config = SettingsConfigDict(
