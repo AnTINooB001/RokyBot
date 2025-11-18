@@ -46,6 +46,7 @@ class User(Base):
     subscribed: Mapped[bool] = mapped_column(default=False)
     registered_at: Mapped[created_at] 
     is_banned: Mapped[bool] = mapped_column(default=False, server_default="false", index=True)
+    is_admin: Mapped[bool] = mapped_column(default=False, server_default="false")
     videos: Mapped[list["Video"]] = relationship(back_populates="user")
     video_history: Mapped[list["VideoHistory"]] = relationship(back_populates="user")
     payouts: Mapped[list["Payout"]] = relationship(back_populates="user")

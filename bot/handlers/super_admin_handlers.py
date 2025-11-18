@@ -17,8 +17,7 @@ from bot.db.repository import Repository
 from bot.keyboards import admin_keyboards as kb
 from bot.services.coingecko_service import coingecko_service
 from bot.services.ton_service import ton_service
-from bot.config import config
-from bot.filters.admin_filter import IsSuperAdmin
+from bot.filters.admin_filter import IsSuperAdmin, admin_cache
 # Импортируем функцию отображения меню из admin_handlers
 from bot.handlers.admin_handlers import show_admin_panel
 
@@ -32,6 +31,9 @@ class BonusFSM(StatesGroup):
     waiting_for_username = State()
     waiting_for_amount = State()
 
+class AddAdminFSM(StatesGroup):
+    waiting_for_username = State()
+
 # --- Router ---
 super_admin_router = Router()
 # ЖЕСТКИЙ ФИЛЬТР: Только супер-админы имеют доступ к этим хендлерам
@@ -39,7 +41,136 @@ super_admin_router.message.filter(IsSuperAdmin())
 super_admin_router.callback_query.filter(IsSuperAdmin())
 
 
-# --- Payout Logic ---
+# ==============================================================================
+# ADMIN MANAGEMENT LOGIC
+# ==============================================================================
+
+@super_admin_router.callback_query(F.data == "admin_manage_menu")
+async def admin_manage_menu_handler(callback: CallbackQuery):
+    await callback.message.edit_text(
+        "👮 <b>Панель управления администраторами</b>\n\n"
+        "Здесь вы можете назначать новых админов или снимать права с существующих.",
+        reply_markup=kb.get_admin_management_menu()
+    )
+    await callback.answer()
+
+# --- 1. Просмотр списка админов ---
+@super_admin_router.callback_query(kb.AdminManageCallback.filter(F.action == "list"))
+async def list_admins_handler(callback: CallbackQuery, session_maker: async_sessionmaker):
+    async with session_maker() as session:
+        repo = Repository(session)
+        admins = await repo.get_all_admins()
+    
+    if not admins:
+        text = "📋 Список назначенных админов пуст."
+    else:
+        text = "📋 <b>Список назначенных админов:</b>\n<i>Нажмите на кнопку с пользователем, чтобы лишить его прав.</i>"
+        
+    await callback.message.edit_text(text, reply_markup=kb.get_admins_list_keyboard(admins))
+    await callback.answer()
+
+# --- 2. Удаление админа ---
+@super_admin_router.callback_query(kb.AdminManageCallback.filter(F.action == "remove"))
+async def remove_admin_handler(callback: CallbackQuery, callback_data: kb.AdminManageCallback, session_maker: async_sessionmaker):
+    user_db_id = callback_data.user_id
+    
+    async with session_maker() as session:
+        repo = Repository(session)
+        user = await repo.session.get(User, user_db_id)
+        
+        if user:
+            # Снимаем права в БД
+            await repo.set_admin_status(user.id, False)
+            await session.commit()
+            
+            # Сбрасываем кэш, чтобы фильтр IsAdmin перестал пускать пользователя
+            admin_cache[user.tg_id] = False
+            
+            await callback.answer(f"Пользователь {user.username or user.tg_id} разжалован.", show_alert=True)
+            
+            # Уведомляем бывшего админа
+            try:
+                await callback.bot.send_message(user.tg_id, "📉 Вы были лишены прав администратора.")
+            except Exception: pass
+            
+            # Обновляем список в сообщении
+            admins = await repo.get_all_admins()
+            await callback.message.edit_reply_markup(reply_markup=kb.get_admins_list_keyboard(admins))
+        else:
+            await callback.answer("Пользователь не найден.", show_alert=True)
+
+# --- 3. Добавление админа (Начало) ---
+@super_admin_router.callback_query(kb.AdminManageCallback.filter(F.action == "add"))
+async def add_admin_start_handler(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(main_msg_id=callback.message.message_id)
+    await state.set_state(AddAdminFSM.waiting_for_username)
+    await callback.message.edit_text(
+        "Введите <b>@username</b> или <b>Telegram ID</b> пользователя, которого хотите сделать админом:",
+        reply_markup=kb.get_admin_cancel_keyboard()
+    )
+    await callback.answer()
+
+# --- 4. Добавление админа (Финал) ---
+@super_admin_router.message(AddAdminFSM.waiting_for_username)
+async def add_admin_finish_handler(message: Message, state: FSMContext, session_maker: async_sessionmaker):
+    input_data = message.text.lstrip('@').strip()
+    data = await state.get_data()
+    main_msg_id = data.get("main_msg_id")
+    
+    await message.delete()
+    
+    async with session_maker() as session:
+        repo = Repository(session)
+        user = None
+        # Поиск пользователя
+        if input_data.isdigit():
+            user = await repo.get_user_by_tg_id(int(input_data))
+        if not user:
+            user = await repo.get_user_by_username(input_data)
+            
+        # Обработка ошибок
+        if not user:
+            await message.bot.edit_message_text(
+                chat_id=message.chat.id, message_id=main_msg_id,
+                text=f"🚫 Пользователь <code>{input_data}</code> не найден в базе бота.\n"
+                     f"Пользователь должен сначала запустить бота (/start).",
+                reply_markup=kb.get_admin_cancel_keyboard()
+            )
+            return
+            
+        if user.is_admin:
+            await message.bot.edit_message_text(
+                chat_id=message.chat.id, message_id=main_msg_id,
+                text=f"⚠️ Пользователь {user.username or user.tg_id} уже является админом.",
+                reply_markup=kb.get_admin_cancel_keyboard()
+            )
+            return
+
+        # Назначение админа
+        await repo.set_admin_status(user.id, True)
+        await session.commit()
+        
+        # Обновляем кэш, чтобы права появились мгновенно
+        admin_cache[user.tg_id] = True
+    
+    await state.clear()
+    
+    # Подтверждение супер-админу
+    await message.bot.edit_message_text(
+        chat_id=message.chat.id, message_id=main_msg_id,
+        text=f"✅ Пользователь <b>{user.username or user.tg_id}</b> успешно назначен администратором!",
+        reply_markup=kb.get_admin_management_menu()
+    )
+    
+    # Уведомление новому админу
+    try:
+        await message.bot.send_message(user.tg_id, "🎉 Вам выданы права администратора! Введите /start для входа в панель.")
+    except Exception: pass
+
+
+# ==============================================================================
+# PAYOUT LOGIC
+# ==============================================================================
 
 @super_admin_router.callback_query(F.data == "get_payout_request")
 async def get_payout_request_handler(callback: CallbackQuery, session_maker: async_sessionmaker):
@@ -141,7 +272,9 @@ async def cancel_payout_handler(callback: CallbackQuery, callback_data: kb.Payou
             await bot.send_message(callback.from_user.id, texts['admin_panel']['error_notify_user_alert'].format(error=e))
 
 
-# --- Bonus Logic ---
+# ==============================================================================
+# BONUS LOGIC
+# ==============================================================================
 
 @super_admin_router.callback_query(F.data == "give_bonus_start")
 async def start_bonus_handler(callback: CallbackQuery, state: FSMContext):

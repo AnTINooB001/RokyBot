@@ -24,7 +24,6 @@ class Settings(BaseSettings):
     amvera_pg_password: SecretStr
 
     # --- Admin and Channel ---
-    admin_ids_str: str = Field(alias="ADMIN_IDS")
     super_admin_ids_str: str = Field(alias="SUPER_ADMIN_IDS", default="") 
     channel_id: str
 

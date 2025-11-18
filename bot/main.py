@@ -7,8 +7,8 @@ import sys
 from functools import partial
 
 from aiohttp import web
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-from sqlalchemy import text  # <-- ДОБАВЛЕН ИМПОРТ
 
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
@@ -17,30 +17,28 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from bot.config import config
 from bot.db.models import Base
 from bot.middlewares.ban_check import BanCheckMiddleware
+
+# --- ИЗМЕНЕНИЕ 1: Импортируем новый роутер ---
 from bot.handlers.admin_handlers import admin_router
+from bot.handlers.super_admin_handlers import super_admin_router # <--- ВОТ ЭТОГО НЕ ХВАТАЛО
 from bot.handlers.user_handlers import user_router
-
-
+# ---------------------------------------------
 
 async def on_startup(bot: Bot, engine) -> None:
-
     logging.info("Warming up database connection pool...")
     try:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
         logging.info("Database connection pool is ready.")
     except Exception as e:
-        # --- НАЧАЛО ИЗМЕНЕНИЯ ---
         logging.critical(f"FATAL: Could not connect to the database on startup: {e}", exc_info=True)
         logging.critical("Application is shutting down due to a critical database connection error.")
-        # Немедленно останавливаем приложение с кодом ошибки 1
         sys.exit(1)
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     
     await bot.delete_webhook(drop_pending_updates=True)
-    
     await bot.set_webhook(
         url=config.webhook_url,
         secret_token=config.webhook_secret.get_secret_value()
@@ -60,7 +58,6 @@ def main() -> None:
         stream=sys.stdout,
     )
 
-    # ВОЗВРАЩАЕМ НАСТРОЙКИ ПУЛА СОЕДИНЕНИЙ ДЛЯ POSTGRESQL
     engine = create_async_engine(
         config.database_url,
         echo=False,
@@ -82,8 +79,17 @@ def main() -> None:
     dp.startup.register(partial(on_startup, engine=engine))
     dp.shutdown.register(on_shutdown)
     
+    # --- ИЗМЕНЕНИЕ 2: Регистрируем роутеры в правильном порядке ---
+    
+    # 1. Сначала Супер-Админ (самый важный, специфичные права)
+    dp.include_router(super_admin_router) 
+    
+    # 2. Потом Обычный Админ
     dp.include_router(admin_router)
+    
+    # 3. В конце Юзер (все, кто не попал выше)
     dp.include_router(user_router)
+    # --------------------------------------------------------------
     
     app = web.Application()
     

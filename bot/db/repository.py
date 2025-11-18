@@ -173,3 +173,15 @@ class Repository:
         query = select(Payout.id).where(Payout.user_id == user_id, Payout.status == PayoutStatus.PENDING).limit(1)
         result = await self.session.execute(query)
         return result.scalar_one_or_none() is not None
+
+    # --- Admin Management ---
+    async def set_admin_status(self, user_id: int, is_admin: bool) -> None:
+        """Назначает или снимает права админа."""
+        stmt = update(User).where(User.id == user_id).values(is_admin=is_admin)
+        await self.session.execute(stmt)
+
+    async def get_all_admins(self) -> list[User]:
+        """Возвращает список всех админов из БД."""
+        query = select(User).where(User.is_admin == True)
+        result = await self.session.execute(query)
+        return result.scalars().all()
