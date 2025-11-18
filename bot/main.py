@@ -50,7 +50,8 @@ def main() -> None:
         config.database_url,
         echo=False,
         pool_size=20,
-        max_overflow=10
+        max_overflow=10,
+        pool_recycle=3600
     )
     
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
