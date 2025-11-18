@@ -4,11 +4,18 @@ import logging
 from typing import Callable, Dict, Any, Awaitable
 
 from aiogram import BaseMiddleware
-from aiogram.types import TelegramObject
+from aiogram.types import TelegramObject, Message, CallbackQuery
+from cachetools import TTLCache
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from bot.db.repository import Repository
+from bot.db.models import User
 
+# Кэш хранит ID пользователей и их статус бана.
+# maxsize=10000: помним до 10 тысяч пользователей
+# ttl=300: забываем запись через 5 минут (чтобы подтянуть изменения из БД, если забанили через БД напрямую)
+# Если вы баните только через бота, TTL можно сделать больше.
+cache = TTLCache(maxsize=10_000, ttl=300)
 
 class BanCheckMiddleware(BaseMiddleware):
     async def __call__(
@@ -17,31 +24,45 @@ class BanCheckMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: Dict[str, Any],
     ) -> Any:
-        """
-        Проверяет, заблокирован ли пользователь.
-        Самостоятельно создает КОРОТКОЖИВУЩУЮ сессию для проверки.
-        """
-        user = data.get("event_from_user")
-        session_maker: async_sessionmaker = data.get("session_maker")
         
-        # Если это событие не от пользователя, или нет фабрики сессий - пропускаем
-        if not user or not session_maker:
+        # Получаем пользователя из события
+        user = None
+        if isinstance(event, (Message, CallbackQuery)):
+            user = event.from_user
+            
+        if not user:
             return await handler(event, data)
+
+        # 1. БЫСТРАЯ ПРОВЕРКА: Смотрим в кэш
+        # Если мы точно знаем, что он забанен - сразу стоп.
+        is_banned_cached = cache.get(user.id)
         
-        is_banned = False
-        # --- ОТКРЫЛ БАЗУ ---
-        async with session_maker() as session:
-            repo = Repository(session)
-            db_user = await repo.get_user_by_tg_id(user.id)
-            if db_user and db_user.is_banned:
-                is_banned = True
-        # --- СРАЗУ ЖЕ ЗАКРЫЛ БАЗУ ---
-        
-        if is_banned:
-            logging.info(f"Ignoring update from banned user {user.id}")
+        if is_banned_cached is True:
+            # Пользователь в кэше как забаненный - игнорируем
             return
+
+        # Если в кэше записи нет (или False), или срок истек - проверяем базу.
+        # Но чтобы не долбить базу каждым сообщением "чистого" юзера,
+        # мы должны кэшировать и "чистых" тоже!
         
-        # Если пользователь не забанен, просто вызываем следующий обработчик.
-        # Этот следующий обработчик (например, start_handler) уже сам откроет
-        # СВОЕ СОБСТВЕННОЕ, НОВОЕ соединение, когда оно ему понадобится.
+        if is_banned_cached is None:
+            session_maker: async_sessionmaker = data.get("session_maker")
+            async with session_maker() as session:
+                # Делаем быстрый запрос, выбираем только поле is_banned
+                result = await session.execute(
+                    select(User.is_banned).where(User.tg_id == user.id)
+                )
+                is_banned_db = result.scalar()
+                
+                # Если пользователя вообще нет в базе - он не забанен (None -> False)
+                if is_banned_db is None:
+                    is_banned_db = False
+                
+                # Сохраняем результат в кэш
+                cache[user.id] = is_banned_db
+                
+                if is_banned_db:
+                    return
+
+        # Если мы здесь, значит пользователь не забанен
         return await handler(event, data)
