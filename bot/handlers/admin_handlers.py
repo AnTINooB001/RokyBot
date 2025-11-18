@@ -38,6 +38,9 @@ class BonusFSM(StatesGroup):
     waiting_for_username = State()
     waiting_for_amount = State()
 
+class VideoInProcess(StatesGroup):
+    waiting_video_process = State()
+
 admin_router = Router()
 admin_router.message.middleware(AdminCheckMiddleware())
 admin_router.callback_query.middleware(AdminCheckMiddleware())
@@ -89,7 +92,7 @@ async def back_to_admin_main_handler(callback: CallbackQuery, bot: Bot, state: F
 
 # --- Video Review Logic ---
 @admin_router.callback_query(F.data == "get_video_review")
-async def get_video_for_review_handler(callback: CallbackQuery, session_maker: async_sessionmaker):
+async def get_video_for_review_handler(callback: CallbackQuery, session_maker: async_sessionmaker, state :FSMContext):
     video_data = None
     async with session_maker() as session:
         repo = Repository(session)
@@ -111,13 +114,18 @@ async def get_video_for_review_handler(callback: CallbackQuery, session_maker: a
         reply_markup=kb.get_video_review_keyboard(video_id=video_data['id']), 
         disable_web_page_preview=True
     )
+
+    await state.update_data(video_link=video.link)
+    await state.set_state(State(VideoInProcess.waiting_video_process))
     await callback.answer()
 
 
-
+#TODO
 @admin_router.callback_query(kb.VideoReviewCallback.filter(F.action == "accept"))
-async def accept_video_handler(callback: CallbackQuery, callback_data: kb.VideoReviewCallback, bot: Bot, session_maker: async_sessionmaker):
+async def accept_video_handler(callback: CallbackQuery, callback_data: kb.VideoReviewCallback, bot: Bot, session_maker: async_sessionmaker, state :FSMContext):
     user_tg_id = 0
+    data = await state.get_data()
+    video_link = data.get("video_link")
     async with session_maker() as session:
         repo = Repository(session)
         try:
@@ -133,7 +141,7 @@ async def accept_video_handler(callback: CallbackQuery, callback_data: kb.VideoR
 
     if user_tg_id:
         try:
-            await bot.send_message(user_tg_id, texts['user_notifications']['video_accepted'].format(amount=config.payout_per_video))
+            await bot.send_message(user_tg_id, texts['user_notifications']['video_accepted'].format(amount=config.payout_per_video, video_link=video_link))
         except Exception as e:
             await bot.send_message(callback.from_user.id, texts['admin_panel']['error_notify_user_alert'].format(error=e))
         
@@ -150,6 +158,7 @@ async def rejection_reason_handler(message: Message, state: FSMContext, bot: Bot
     video_id = data.get("video_id")
     original_message_id = data.get("original_message_id")
     reason = message.text
+    video_link = data.get("video_link")
     await state.clear()
     
     await message.delete()
@@ -168,7 +177,7 @@ async def rejection_reason_handler(message: Message, state: FSMContext, bot: Bot
     await show_admin_panel(bot, message.chat.id, session_maker, original_message_id)
     if user_tg_id:
         try:
-            await bot.send_message(user_tg_id, texts['user_notifications']['video_rejected'].format(reason=reason))
+            await bot.send_message(user_tg_id, texts['user_notifications']['video_rejected'].format(reason=reason, video_link=video_link))
         except Exception as e:
             await bot.send_message(message.from_user.id, texts['admin_panel']['error_notify_user_alert'].format(error=e))
 
