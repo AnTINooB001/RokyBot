@@ -31,10 +31,10 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
 
 def get_profile_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="💸 Запросить вывод", callback_data="request_payout"))
-    # --- НОВАЯ КНОПКА ---
-    builder.row(InlineKeyboardButton(text="✏️ Изменить кошелек", callback_data="change_wallet"))
-    # ------------------
+
+    builder.row(
+        InlineKeyboardButton(text="💸 Запросить вывод", callback_data="request_payout"),
+        InlineKeyboardButton(text="✏️ Изменить кошелек", callback_data="change_wallet"))
     builder.row(InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="back_to_main_menu"))
     return builder.as_markup()
 

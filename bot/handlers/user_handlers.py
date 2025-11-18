@@ -72,6 +72,7 @@ async def show_profile_panel(bot: Bot, chat_id: int, session_maker: async_sessio
         repo = Repository(session)
         user = await repo.get_user_by_tg_id(chat_id)
         if not user:
+            bot.send_message(chat_id, "Error, your id not exist in database!") # <-- check
             return
 
         on_review_count = await repo.count_videos_on_review(user.id)
@@ -202,7 +203,7 @@ async def wallet_handler(message: Message, state: FSMContext, bot: Bot, session_
     prompt_message_id = data.get("prompt_message_id")
     wallet_address = message.text.strip()
 
-    await message.delete()
+    #await message.delete()
 
     try:
         Address(wallet_address)
@@ -224,8 +225,12 @@ async def wallet_handler(message: Message, state: FSMContext, bot: Bot, session_
         #     except TelegramBadRequest:
         #         pass
 
-        final_text = texts['registration']['wallet_saved'] + "\n\n" + texts['user_panel']['main_menu_text']
+        success_wallet = texts['registration']['wallet_saved']
+        message.answer(success_wallet)
+
+        final_text = texts['user_panel']['main_menu_text']
         await show_main_menu(bot, message.chat.id, text=final_text)
+
     else:
         await bot.edit_message_text(
             chat_id=message.chat.id,
@@ -275,7 +280,7 @@ async def new_wallet_handler(message: Message, state: FSMContext, bot: Bot, sess
     data = await state.get_data()
     prompt_message_id = data.get("prompt_message_id")
     new_wallet_address = message.text.strip()
-    await message.delete()
+    #await message.delete()
 
     try:
         Address(new_wallet_address)
@@ -292,9 +297,10 @@ async def new_wallet_handler(message: Message, state: FSMContext, bot: Bot, sess
         await state.clear()
         await bot.delete_message(message.chat.id, prompt_message_id)
 
-        temp_msg = await message.answer(texts['user_panel']['wallet_changed_successfully'])
-        await asyncio.sleep(2)
-        await temp_msg.delete()
+        await message.answer(texts['user_panel']['wallet_changed_successfully'])
+        #temp_msg = await message.answer(texts['user_panel']['wallet_changed_successfully'])
+        #await asyncio.sleep(2)
+        #await temp_msg.delete()
 
         await show_profile_panel(bot, message.chat.id, session_maker)
     else:
@@ -331,7 +337,7 @@ async def receive_video_link_handler(message: Message, state: FSMContext, bot: B
     data = await state.get_data()
     prompt_message_id = data.get("prompt_message_id")
     await state.clear()
-    await message.delete()
+    #await message.delete()
 
     if not message.text or not message.text.startswith(('http://', 'https://')):
         await bot.edit_message_text(
@@ -349,6 +355,7 @@ async def receive_video_link_handler(message: Message, state: FSMContext, bot: B
             await repo.add_video_to_queue(user_id=user.id, link=message.text)
             await session.commit()
 
+        await message.answer(texts['user_panel']["video_submitted"])
         await bot.delete_message(message.chat.id, prompt_message_id)
         await show_main_menu(bot, message.chat.id)
 
