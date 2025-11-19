@@ -37,8 +37,10 @@ class AddAdminFSM(StatesGroup):
     waiting_for_username = State()
 
 super_admin_router = Router()
-super_admin_router.message.filter(IsSuperAdmin())
-super_admin_router.callback_query.filter(IsSuperAdmin())
+
+if not __debug__ :
+    super_admin_router.message.filter(IsSuperAdmin())
+    super_admin_router.callback_query.filter(IsSuperAdmin())
 
 
 # ==============================================================================
@@ -47,9 +49,8 @@ super_admin_router.callback_query.filter(IsSuperAdmin())
 
 @super_admin_router.callback_query(F.data == "download_logs")
 async def download_logs_handler(callback: CallbackQuery, session_maker: async_sessionmaker):
-    await callback.answer("⏳ Генерирую отчет, подождите...")
+    await callback.answer("⏳ Генерирую отчет...")
     
-    # Получаем все логи из БД
     async with session_maker() as session:
         repo = Repository(session)
         logs = await repo.get_all_logs()
@@ -58,43 +59,26 @@ async def download_logs_handler(callback: CallbackQuery, session_maker: async_se
         await callback.message.answer("Логи пусты.")
         return
 
-    # Создаем временный файл
-    # delete=False, чтобы файл не удалился до отправки
     temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv', encoding='utf-8-sig', newline='')
-    
     try:
         writer = csv.writer(temp_file, delimiter=';')
-        # Заголовки
         writer.writerow(['ID', 'Time (UTC)', 'Admin ID', 'Admin Username', 'Action', 'Details'])
-        
         for log in logs:
             created_at_str = log.created_at.strftime("%Y-%m-%d %H:%M:%S")
-            writer.writerow([
-                log.id,
-                created_at_str,
-                log.actor_tg_id,
-                log.actor_username or "",
-                log.action,
-                log.details or ""
-            ])
+            writer.writerow([log.id, created_at_str, log.actor_tg_id, log.actor_username or "", log.action, log.details or ""])
+        temp_file.close()
         
-        temp_file.close() # Закрываем, чтобы сбросить буфер на диск
-        
-        # Отправляем файл
         input_file = FSInputFile(temp_file.name, filename=f"logs_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.csv")
         await callback.message.answer_document(document=input_file, caption="📊 Полный лог действий.")
-        
     except Exception as e:
         logging.error(f"Error exporting logs: {e}", exc_info=True)
-        await callback.message.answer("❌ Произошла ошибка при создании файла логов.")
+        await callback.message.answer("❌ Ошибка при создании файла.")
     finally:
-        # Удаляем временный файл
         if os.path.exists(temp_file.name):
             os.remove(temp_file.name)
 
-
 # ==============================================================================
-# ADMIN MANAGEMENT LOGIC (WITH LOGGING)
+# ADMIN MANAGEMENT
 # ==============================================================================
 
 @super_admin_router.callback_query(F.data == "admin_manage_menu")
@@ -133,15 +117,12 @@ async def remove_admin_handler(callback: CallbackQuery, callback_data: kb.AdminM
         
         if user:
             await repo.set_admin_status(user.id, False)
-            
-            # LOG
             await repo.log_action(
                 actor_tg_id=callback.from_user.id,
                 actor_username=callback.from_user.username,
                 action="ADMIN_REMOVED",
                 details=f"Removed admin rights from user {user.tg_id} (@{user.username})"
             )
-            
             await session.commit()
             admin_cache[user.tg_id] = False
             
@@ -202,31 +183,26 @@ async def add_admin_finish_handler(message: Message, state: FSMContext, session_
             return
 
         await repo.set_admin_status(user.id, True)
-        
-        # LOG
         await repo.log_action(
             actor_tg_id=message.from_user.id,
             actor_username=message.from_user.username,
             action="ADMIN_ADDED",
             details=f"Granted admin rights to {user.tg_id} (@{user.username})"
         )
-
         await session.commit()
         admin_cache[user.tg_id] = True
     
     await state.clear()
-    
     await message.answer(
         f"✅ Пользователь <b>{user.username or user.tg_id}</b> успешно назначен администратором!",
         reply_markup=kb.get_admin_management_menu()
     )
-    
     try: await message.bot.send_message(user.tg_id, "🎉 Вам выданы права администратора! Введите /start для входа в панель.")
     except: pass
 
 
 # ==============================================================================
-# PAYOUT LOGIC (WITH LOGGING)
+# PAYOUT LOGIC (HISTORY PRESERVED)
 # ==============================================================================
 
 @super_admin_router.callback_query(F.data == "get_payout_request")
@@ -260,16 +236,15 @@ async def confirm_payout_handler(callback: CallbackQuery, callback_data: kb.Payo
         payout = await repo.session.get(Payout, callback_data.payout_id, options=[selectinload(Payout.user)])
         
         if not payout or payout.status != PayoutStatus.PENDING:
-            await callback.message.delete()
-            await callback.message.answer(texts['admin_panel']['error_already_processed'])
+            await callback.message.edit_text(texts['admin_panel']['error_already_processed'])
+            # Возвращаем меню
             await show_admin_panel(bot, callback.message.chat.id, session_maker)
             return
         payout_data = {"id": payout.id, "wallet": payout.wallet, "amount": payout.amount, "user_tg_id": payout.user.tg_id, "username": payout.user.username}
 
     rate = coingecko_service.get_ton_to_usd_rate()
     if rate <= 0:
-        await callback.message.delete()
-        await callback.message.answer(texts['admin_panel']['payout_error_api'])
+        await callback.message.edit_text(texts['admin_panel']['payout_error_api'])
         await show_admin_panel(bot, callback.message.chat.id, session_maker)
         return
     
@@ -287,19 +262,23 @@ async def confirm_payout_handler(callback: CallbackQuery, callback_data: kb.Payo
         async with session_maker() as session:
             repo = Repository(session)
             await repo.confirm_payout(payout_id=callback_data.payout_id, admin_tg_id=callback.from_user.id, tx_hash=tx_hash)
-            
-            # LOG
             await repo.log_action(
                 actor_tg_id=callback.from_user.id,
                 actor_username=callback.from_user.username,
                 action="PAYOUT_CONFIRMED",
                 details=f"Payout ID {payout_data['id']} to user {user_to_notify_id}. Amount: ${amount_to_notify} (TX: {tx_hash})"
             )
-            
             await session.commit()
         
-        await callback.message.delete()
-        await callback.message.answer(texts['admin_panel']['payout_confirmed_admin'].format(tx_hash=tx_hash))
+        # --- ИЗМЕНЕНИЕ: Редактируем сообщение на "Успех", чтобы оставить в истории ---
+        username_label = f"@{payout_data['username']}" if payout_data['username'] else f"ID: {user_to_notify_id}"
+        await callback.message.edit_text(
+            f"✅ <b>Выплата подтверждена</b>\n"
+            f"👤 Юзер: {username_label}\n"
+            f"💰 Сумма: {amount_to_notify}$\n"
+            f"🔗 TX: <code>{tx_hash}</code>"
+        )
+        
         try:
             await bot.send_message(user_to_notify_id, texts['user_notifications']['payout_confirmed_user'].format(amount=amount_to_notify, tx_hash=tx_hash))
         except Exception as e:
@@ -308,53 +287,62 @@ async def confirm_payout_handler(callback: CallbackQuery, callback_data: kb.Payo
         async with session_maker() as session:
             repo = Repository(session)
             await repo.cancel_payout(payout_id=callback_data.payout_id, admin_tg_id=callback.from_user.id)
-            
-            # LOG
             await repo.log_action(
                 actor_tg_id=callback.from_user.id,
                 actor_username=callback.from_user.username,
                 action="PAYOUT_FAILED_TX",
                 details=f"Payout ID {payout_data['id']} failed (transaction error)."
             )
-            
             await session.commit()
             
-        await callback.message.delete()
-        await callback.message.answer(texts['admin_panel']['payout_error_tx_admin'])
+        # Редактируем на ошибку
+        await callback.message.edit_text(f"❌ <b>Ошибка транзакции</b>\nЗаявка на {amount_to_notify}$ отменена, средства возвращены.")
+        
         try:
             await bot.send_message(user_to_notify_id, texts['user_notifications']['payout_failed_user'])
         except Exception as e:
             await bot.send_message(callback.from_user.id, texts['admin_panel']['error_notify_user_alert'].format(error=e))
     
-    await asyncio.sleep(3)
+    # Отправляем новое меню
     await show_admin_panel(bot, callback.message.chat.id, session_maker)
 
 
 @super_admin_router.callback_query(kb.PayoutCallback.filter(F.action == "cancel"))
 async def cancel_payout_handler(callback: CallbackQuery, callback_data: kb.PayoutCallback, bot: Bot, session_maker: async_sessionmaker):
-    await callback.message.delete()
+    # Не удаляем, будем редактировать
+    
     user_tg_id = 0
+    amount = 0
+    username = ""
+    
     async with session_maker() as session:
         repo = Repository(session)
         try:
             cancelled_payout = await repo.cancel_payout(payout_id=callback_data.payout_id, admin_tg_id=callback.from_user.id)
             user_tg_id = cancelled_payout.user.tg_id
+            amount = cancelled_payout.amount
+            username = cancelled_payout.user.username
             
-            # LOG
             await repo.log_action(
                 actor_tg_id=callback.from_user.id,
                 actor_username=callback.from_user.username,
                 action="PAYOUT_CANCELLED",
                 details=f"Payout ID {callback_data.payout_id} cancelled by admin."
             )
-
             await session.commit()
         except ValueError:
-            await callback.answer(texts['admin_panel']['error_already_processed'], show_alert=True)
+            await callback.message.edit_text(texts['admin_panel']['error_already_processed'])
             await show_admin_panel(bot, callback.message.chat.id, session_maker)
             return
     
-    await callback.answer(texts['admin_panel']['payout_cancelled_admin'], show_alert=False)
+    # --- ИЗМЕНЕНИЕ: Редактируем на статус "Отменено" ---
+    username_label = f"@{username}" if username else f"ID: {user_tg_id}"
+    await callback.message.edit_text(
+        f"❌ <b>Выплата отменена</b>\n"
+        f"👤 Юзер: {username_label}\n"
+        f"💰 Сумма: {amount}$"
+    )
+    
     await show_admin_panel(bot, callback.message.chat.id, session_maker)
 
     if user_tg_id:
@@ -365,14 +353,13 @@ async def cancel_payout_handler(callback: CallbackQuery, callback_data: kb.Payou
 
 
 # ==============================================================================
-# BONUS LOGIC (WITH LOGGING)
+# BONUS LOGIC
 # ==============================================================================
 
 @super_admin_router.callback_query(F.data == "give_bonus_start")
 async def start_bonus_handler(callback: CallbackQuery, state: FSMContext):
     await callback.message.delete()
     msg = await callback.message.answer(texts['admin_panel']['ask_for_bonus_username'], reply_markup=kb.get_admin_cancel_keyboard())
-    
     await state.update_data(main_panel_message_id=msg.message_id)
     await state.set_state(BonusFSM.waiting_for_username)
     await callback.answer()
@@ -445,7 +432,6 @@ async def bonus_amount_handler(message: Message, state: FSMContext, bot: Bot, se
         if user:
             user_tg_id = user.tg_id
         
-        # LOG
         await repo.log_action(
             actor_tg_id=message.from_user.id,
             actor_username=message.from_user.username,

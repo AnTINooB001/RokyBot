@@ -38,4 +38,4 @@ COPY . .
 ENV PATH="/app/venv/bin:$PATH"
 
 # Команда для запуска бота при старте контейнера
-CMD ["python","-O", "-m", "bot.main"]
+CMD ["python", "-m", "bot.main"]

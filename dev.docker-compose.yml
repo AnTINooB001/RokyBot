@@ -1,0 +1,44 @@
+# docker-compose.yml
+
+services:
+
+  db:
+    image: postgres:15-alpine
+    container_name: roky_postgres
+    restart: always
+    # Загружаем переменные для создания пользователя и базы данных из .env файла
+    env_file:
+      - .env
+    ports:
+      - "5433:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/datas
+    # Проверка "здоровья", чтобы бот не стартовал раньше базы
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+  bot:
+    build: 
+      context: .
+      dockerfile: dev.Dockerfile
+    container_name: roky_bot
+    restart: always
+    ports:
+      - "8081:8081"
+    env_file:
+      - .env
+    # volumes:
+    #   - db_data:/data
+
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  # Наше хранилище для данных остается без изменений.
+  #db_data
+  pg_data:
+
+  

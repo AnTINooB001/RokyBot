@@ -31,10 +31,8 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
 
 def get_profile_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-
-    builder.row(
-        InlineKeyboardButton(text="💸 Запросить вывод", callback_data="request_payout"),
-        InlineKeyboardButton(text="✏️ Изменить кошелек", callback_data="change_wallet"))
+    builder.row(InlineKeyboardButton(text="💸 Запросить вывод", callback_data="request_payout"))
+    builder.row(InlineKeyboardButton(text="✏️ Изменить кошелек", callback_data="change_wallet"))
     builder.row(InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="back_to_main_menu"))
     return builder.as_markup()
 
@@ -54,9 +52,15 @@ def get_cancel_keyboard() -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="❌ Отмена", callback_data="back_to_main_menu"))
     return builder.as_markup()
 
-# --- НОВАЯ КЛАВИАТУРА ДЛЯ ОТМЕНЫ СМЕНЫ КОШЕЛЬКА ---
 def get_cancel_change_wallet_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура с одной кнопкой 'Отмена', ведущей обратно в профиль."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="❌ Отмена", callback_data="show_profile"))
+    return builder.as_markup()
+
+# --- НОВАЯ КЛАВИАТУРА ---
+def get_back_to_profile_keyboard() -> InlineKeyboardMarkup:
+    """Кнопка возврата в профиль (используется при ошибках)."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="⬅️ Назад в профиль", callback_data="show_profile"))
     return builder.as_markup()

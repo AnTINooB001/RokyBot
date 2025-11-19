@@ -10,6 +10,7 @@ from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup, any_state
 from aiogram.types import Message, CallbackQuery
+from aiogram.exceptions import TelegramBadRequest
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from bot.db.models import User
@@ -36,22 +37,107 @@ class VideoInProcess(StatesGroup):
 class UserManagementFSM(StatesGroup):
     waiting_for_username = State()
 
+# --- Router Setup ---
 admin_router = Router()
-admin_router.message.filter(IsAdmin())
-admin_router.callback_query.filter(IsAdmin())
+
+if not __debug__ :
+    admin_router.message.filter(IsAdmin())
+    admin_router.callback_query.filter(IsAdmin())
 
 
 # --- Helper Functions ---
 
 def check_ban_permissions(actor_tg_id: int, target_user: User) -> bool:
+    """Проверяет иерархию прав для бана/разбана."""
     super_admins = config.super_admin_ids
     target_tg_id = target_user.tg_id
+    
     if actor_tg_id == target_tg_id: return False
     if target_tg_id in super_admins: return False
     if actor_tg_id in super_admins: return True
     if target_user.is_admin: return False
     return True
 
+
+# ------------------------------------------ TEST --------------------------------------
+if __debug__ :
+    async def show_admin_panel_test(bot: Bot, chat_id: int, session_maker: async_sessionmaker, message_id_to_delete: int = None):
+        """
+        Удаляет старое сообщение (если есть) и отправляет новое с панелью.
+        """
+        queue_count = 0
+        payout_count = 0
+        
+        is_super_admin = False
+
+        async with session_maker() as session:
+            repo = Repository(session)
+            queue_count = await repo.get_queue_count()
+            if is_super_admin:
+                payout_count = await repo.get_pending_payouts_count()
+
+        base_welcome = texts['admin_panel']['welcome']
+        role_title = "Супер-Админ" if is_super_admin else " Админ"
+        text = f"{base_welcome}\n\nВаш уровень доступа: <b>{role_title}</b>"
+        
+        reply_markup = kb.get_admin_main_menu(
+            queue_count=queue_count, 
+            payout_count=payout_count, 
+            is_super_admin=is_super_admin
+        )
+        
+        if message_id_to_delete:
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=message_id_to_delete)
+            except Exception:
+                pass 
+        
+        await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
+
+    async def show_super_admin_panel_test(bot: Bot, chat_id: int, session_maker: async_sessionmaker, message_id_to_delete: int = None):
+        """
+        Удаляет старое сообщение (если есть) и отправляет новое с панелью.
+        """
+        queue_count = 0
+        payout_count = 0
+        
+        is_super_admin = True
+
+        async with session_maker() as session:
+            repo = Repository(session)
+            queue_count = await repo.get_queue_count()
+            if is_super_admin:
+                payout_count = await repo.get_pending_payouts_count()
+
+        base_welcome = texts['admin_panel']['welcome']
+        role_title = "Супер-Админ" if is_super_admin else " Админ"
+        text = f"{base_welcome}\n\nВаш уровень доступа: <b>{role_title}</b>"
+        
+        reply_markup = kb.get_admin_main_menu(
+            queue_count=queue_count, 
+            payout_count=payout_count, 
+            is_super_admin=is_super_admin
+        )
+        
+        if message_id_to_delete:
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=message_id_to_delete)
+            except Exception:
+                pass 
+        
+        await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
+
+    @admin_router.message(Command("admin"))
+    async def admin_panel_handler_test(message: Message, bot: Bot, session_maker: async_sessionmaker):
+        await message.delete()
+        await show_admin_panel_test(bot, message.chat.id, session_maker)
+
+    @admin_router.message(Command("super_admin"))
+    async def admin_panel_handler_test(message: Message, bot: Bot, session_maker: async_sessionmaker):
+        await message.delete()
+        await show_super_admin_panel_test(bot, message.chat.id, session_maker)
+
+# ------------------------------------------------------ TEST ----------------------------------------
 
 async def show_admin_panel(bot: Bot, chat_id: int, session_maker: async_sessionmaker, message_id_to_delete: int = None):
     """
@@ -69,7 +155,7 @@ async def show_admin_panel(bot: Bot, chat_id: int, session_maker: async_sessionm
             payout_count = await repo.get_pending_payouts_count()
 
     base_welcome = texts['admin_panel']['welcome']
-    role_title = "👑 Супер-Админ" if is_super_admin else "👮 Админ"
+    role_title = "Супер-Админ" if is_super_admin else " Админ"
     text = f"{base_welcome}\n\nВаш уровень доступа: <b>{role_title}</b>"
     
     reply_markup = kb.get_admin_main_menu(
@@ -78,39 +164,34 @@ async def show_admin_panel(bot: Bot, chat_id: int, session_maker: async_sessionm
         is_super_admin=is_super_admin
     )
     
-    # 1. Удаляем старое сообщение, если передан ID
     if message_id_to_delete:
         try:
             await bot.delete_message(chat_id=chat_id, message_id=message_id_to_delete)
         except Exception:
-            pass # Сообщение уже удалено или слишком старое, игнорируем
+            pass 
     
-    # 2. Отправляем новое сообщение
     await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
 
 
-# --- Main Navigation ---
+# --- Main Navigation --- 
 
 @admin_router.message(Command("start"))
 async def admin_panel_handler(message: Message, bot: Bot, session_maker: async_sessionmaker):
-    # Удаляем команду /start для чистоты
     await message.delete()
     await show_admin_panel(bot, message.chat.id, session_maker)
 
 @admin_router.callback_query(F.data == "back_to_admin_main", StateFilter(any_state))
 async def back_to_admin_main_handler(callback: CallbackQuery, bot: Bot, state: FSMContext, session_maker: async_sessionmaker):
-    # Проверяем, было ли у админа "на руках" видео
+    # Если админ уходит из режима проверки видео, нужно разблокировать видео
     data = await state.get_data()
     video_id = data.get("video_id")
     current_state = await state.get_state()
     
-    # Если админ уходит из режима проверки видео, нужно разблокировать видео в БД
     if video_id and current_state == VideoInProcess.waiting_video_process:
         async with session_maker() as session:
             repo = Repository(session)
             await repo.unlock_video(video_id)
             await session.commit()
-            logging.info(f"Admin {callback.from_user.id} unlocked video {video_id}")
 
     await state.clear()
     await show_admin_panel(bot, callback.message.chat.id, session_maker, callback.message.message_id)
@@ -121,16 +202,11 @@ async def back_to_admin_main_handler(callback: CallbackQuery, bot: Bot, state: F
 
 @admin_router.callback_query(F.data == "manage_users_start")
 async def manage_users_start_handler(callback: CallbackQuery, state: FSMContext):
-    # Удаляем старое меню
     await callback.message.delete()
-    
-    # Отправляем новое сообщение
     msg = await callback.message.answer(
         "Введите <b>@username</b> или <b>Telegram ID</b> пользователя для управления:",
         reply_markup=kb.get_admin_cancel_keyboard()
     )
-    
-    # Сохраняем ID этого сообщения, чтобы потом удалить/обновить
     await state.update_data(main_panel_message_id=msg.message_id)
     await state.set_state(UserManagementFSM.waiting_for_username)
     await callback.answer()
@@ -141,14 +217,10 @@ async def user_manage_input_handler(message: Message, state: FSMContext, bot: Bo
     data = await state.get_data()
     main_message_id = data.get("main_panel_message_id")
     
-    # Удаляем ввод админа
     await message.delete()
-    
-    # Удаляем предыдущее сообщение бота (с просьбой ввести username)
     if main_message_id:
-        try:
-            await bot.delete_message(chat_id=message.chat.id, message_id=main_message_id)
-        except Exception: pass
+        try: await bot.delete_message(chat_id=message.chat.id, message_id=main_message_id)
+        except: pass
 
     user = None
     async with session_maker() as session:
@@ -159,7 +231,6 @@ async def user_manage_input_handler(message: Message, state: FSMContext, bot: Bo
             user = await repo.get_user_by_username(input_data)
     
     if not user:
-        # Отправляем новое сообщение об ошибке
         new_msg = await message.answer(
             f"🚫 Пользователь <code>{input_data}</code> не найден.\nПопробуйте еще раз:",
             reply_markup=kb.get_admin_cancel_keyboard()
@@ -187,15 +258,9 @@ async def user_manage_input_handler(message: Message, state: FSMContext, bot: Bo
         info_text += "⚠️ <i>У вас нет прав для изменения статуса этого пользователя.</i>"
 
     await state.clear()
-    
-    # Отправляем карточку пользователя новым сообщением
     await message.answer(
         text=info_text,
-        reply_markup=kb.get_user_management_keyboard(
-            db_user_id=user.id, 
-            is_banned=user.is_banned, 
-            can_manage=can_manage
-        )
+        reply_markup=kb.get_user_management_keyboard(db_user_id=user.id, is_banned=user.is_banned, can_manage=can_manage)
     )
 
 
@@ -241,7 +306,6 @@ async def execute_user_action_handler(callback: CallbackQuery, callback_data: kb
             f"Баланс: {user.balance:.2f} $\nСтатус: <b>{status_emoji}</b>\n\n✅ <i>Успешно {log_text}.</i>"
         )
         
-        # Удаляем старую карточку и отправляем новую (чтобы была внизу)
         await callback.message.delete()
         await callback.message.answer(
             text=info_text,
@@ -263,29 +327,32 @@ async def get_video_for_review_handler(callback: CallbackQuery, session_maker: a
     video_data = None
     async with session_maker() as session:
         repo = Repository(session)
-        # ИСПОЛЬЗУЕМ НОВЫЙ МЕТОД
-        # Передаем ID админа, чтобы закрепить видео за ним
         video = await repo.get_video_for_review(admin_tg_id=callback.from_user.id)
-        
         if video:
             video_data = {"id": video.id, "link": video.link, "created_at": video.created_at, "username": video.user.username, "tg_id": video.user.tg_id}
-            # Коммитим транзакцию, чтобы сохранить "замок" в базе
-            await session.commit() 
+            await session.commit()
 
     if not video_data:
         await callback.answer(texts['admin_panel']['queue_empty'], show_alert=True)
         await show_admin_panel(callback.bot, callback.message.chat.id, session_maker)
         return
 
-    await state.set_state(VideoInProcess.waiting_video_process)
-    await state.update_data(video_id=video_data['id'], video_link=video_data['link'], user_tg_id=video_data['tg_id'])
+    user_label = f"@{video_data['username']}" if video_data['username'] else f"ID: {video_data['tg_id']}"
 
-    username = f"@{video_data['username']}" if video_data['username'] else f"ID: {video_data['tg_id']}"
+    await state.set_state(VideoInProcess.waiting_video_process)
+    await state.update_data(
+        video_id=video_data['id'],
+        video_link=video_data['link'],
+        user_tg_id=video_data['tg_id'],
+        user_label=user_label
+    )
+
     review_text = texts['admin_panel']['review_request'].format(
-        username=username, link=video_data['link'], created_at=video_data['created_at'].strftime('%Y-%m-%d %H:%M')
+        username=user_label, 
+        link=video_data['link'], 
+        created_at=video_data['created_at'].strftime('%Y-%m-%d %H:%M')
     )
     
-    # Отправляем новое сообщение
     await callback.message.answer(
         review_text, 
         reply_markup=kb.get_video_review_keyboard(video_id=video_data['id']), 
@@ -296,17 +363,17 @@ async def get_video_for_review_handler(callback: CallbackQuery, session_maker: a
 
 @admin_router.callback_query(kb.VideoReviewCallback.filter(F.action == "accept"))
 async def accept_video_handler(callback: CallbackQuery, bot: Bot, session_maker: async_sessionmaker, state :FSMContext):
-    # Удаляем сообщение с видео
-    await callback.message.delete()
+    await callback.message.delete() 
     
     data = await state.get_data()
     video_id = data.get("video_id")
     video_link = data.get("video_link")
     user_tg_id = data.get("user_tg_id")
+    user_label = data.get("user_label")
     
     if not video_id or (await state.get_state()) != VideoInProcess.waiting_video_process:
         await callback.answer("Ошибка сессии.", show_alert=True)
-        await show_admin_panel(bot, callback.message.chat.id, session_maker) # Вернуть меню
+        await show_admin_panel(bot, callback.message.chat.id, session_maker)
         return
 
     await state.clear()
@@ -321,13 +388,28 @@ async def accept_video_handler(callback: CallbackQuery, bot: Bot, session_maker:
             await show_admin_panel(bot, callback.message.chat.id, session_maker)
             return
     
-    await callback.answer(texts['admin_panel']['video_accepted'].format(amount=MONEY_PER_VIDEO), show_alert=False)
-    # Показываем главное меню новым сообщением
+    # Отправляем отчет Админу
+    await callback.message.answer(
+        f"✅ <b>Видео одобрено</b>\n"
+        f"👤 Пользователь: {user_label}\n"
+        f"🔗 Ссылка: {video_link}\n"
+        f"💸 Начислено: {MONEY_PER_VIDEO} $"
+    )
+    
     await show_admin_panel(bot, callback.message.chat.id, session_maker)
 
+    # Отправляем уведомление Пользователю
     if user_tg_id:
         try:
-            await bot.send_message(user_tg_id, texts['user_notifications']['video_accepted'].format(amount=MONEY_PER_VIDEO, video_link=video_link))
+            # Получаем имя админа
+            admin_name = f"@{callback.from_user.username}" if callback.from_user.username else f"ID: {callback.from_user.id}"
+            
+            msg_text = texts['user_notifications']['video_accepted'].format(
+                amount=MONEY_PER_VIDEO, 
+                video_link=video_link, # <-- ПЕРЕДАЕМ ССЫЛКУ
+                admin_name=admin_name
+            )
+            await bot.send_message(user_tg_id, msg_text)
         except Exception as e:
             await bot.send_message(callback.from_user.id, texts['admin_panel']['error_notify_user_alert'].format(error=e))
         
@@ -339,13 +421,9 @@ async def reject_video_handler(callback: CallbackQuery, state: FSMContext):
         return
 
     await state.set_state(VideoRejection.waiting_for_reason)
-    # Удаляем старое
-    await callback.message.delete()
+    await callback.message.delete() 
     
-    # Отправляем форму причины
     msg = await callback.message.answer(texts['admin_panel']['ask_for_rejection_reason'], reply_markup=kb.get_admin_cancel_keyboard())
-    
-    # Сохраняем ID сообщения, чтобы удалить его, если нажмут "Отмена"
     await state.update_data(original_message_id=msg.message_id)
     await callback.answer()
 
@@ -356,14 +434,15 @@ async def rejection_reason_handler(message: Message, state: FSMContext, bot: Bot
     video_id = data.get("video_id")
     video_link = data.get("video_link")
     user_tg_id = data.get("user_tg_id")
+    user_label = data.get("user_label")
     original_message_id = data.get("original_message_id")
     reason = message.text
     
     await state.clear()
-    await message.delete() # Удаляем текст причины
+    await message.delete() 
     
     if original_message_id:
-        try: await bot.delete_message(message.chat.id, original_message_id) # Удаляем вопрос
+        try: await bot.delete_message(message.chat.id, original_message_id)
         except: pass
 
     async with session_maker() as session:
@@ -376,10 +455,27 @@ async def rejection_reason_handler(message: Message, state: FSMContext, bot: Bot
             await show_admin_panel(bot, message.chat.id, session_maker)
             return
 
+    # Отправляем отчет Админу
+    await message.answer(
+        f"❌ <b>Видео отклонено</b>\n"
+        f"👤 Пользователь: {user_label}\n"
+        f"🔗 Ссылка: {video_link}\n"
+        f"📝 Причина: {reason}"
+    )
+
     await show_admin_panel(bot, message.chat.id, session_maker)
+    
+    # Отправляем уведомление Пользователю
     if user_tg_id:
         try:
-            await bot.send_message(user_tg_id, texts['user_notifications']['video_rejected'].format(reason=reason, video_link=video_link))
+            admin_name = f"@{message.from_user.username}" if message.from_user.username else f"ID: {message.from_user.id}"
+
+            msg_text = texts['user_notifications']['video_rejected'].format(
+                reason=reason, 
+                video_link=video_link, # <-- ПЕРЕДАЕМ ССЫЛКУ
+                admin_name=admin_name
+            )
+            await bot.send_message(user_tg_id, msg_text)
         except Exception as e:
             await bot.send_message(message.from_user.id, texts['admin_panel']['error_notify_user_alert'].format(error=e))
 

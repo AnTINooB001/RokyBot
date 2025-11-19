@@ -3,4 +3,3 @@
 tests/*
 *__pycache__*
 pytest.ini
-docker-compose-test.yml
