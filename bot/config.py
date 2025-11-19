@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     
     # --- Registration Videos ---
     registration_videos_file_ids_str: str = Field(alias="REG_VIDEO_IDS", default="")
+    
+    # --- Notifications ---
+    # Интервал проверки очереди видео (в минутах). По умолчанию 60.
+    notification_interval: int = Field(alias="NOTIFICATION_INTERVAL", default=60)
 
     @property
     def admin_ids(self) -> list[int]:

@@ -9,9 +9,9 @@ from sqlalchemy import (
     ForeignKey,
     String,
     Float,
+    Text, # <-- Добавлено
     func
 )
-# ИМПОРТИРУЕМ PgEnum
 from sqlalchemy.dialects.postgresql import ENUM as PgEnum
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -47,6 +47,7 @@ class User(Base):
     registered_at: Mapped[created_at] 
     is_banned: Mapped[bool] = mapped_column(default=False, server_default="false", index=True)
     is_admin: Mapped[bool] = mapped_column(default=False, server_default="false")
+
     videos: Mapped[list["Video"]] = relationship(back_populates="user")
     video_history: Mapped[list["VideoHistory"]] = relationship(back_populates="user")
     payouts: Mapped[list["Payout"]] = relationship(back_populates="user")
@@ -58,6 +59,9 @@ class Video(Base):
     user_id: Mapped[user_fk]
     link: Mapped[str]
     created_at: Mapped[created_at]
+    locked_by_admin_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    locked_at: Mapped[datetime.datetime | None] = mapped_column(nullable=True)
+
     user: Mapped["User"] = relationship(back_populates="videos")
 
 
@@ -66,7 +70,6 @@ class VideoHistory(Base):
     id: Mapped[int_pk]
     user_id: Mapped[user_fk]
     link: Mapped[str]
-    # ВОЗВРАЩАЕМ PgEnum
     status: Mapped[VideoStatus] = mapped_column(PgEnum(VideoStatus, name="video_status_enum"))
     reason: Mapped[str | None]
     admin_tg_id: Mapped[int] = mapped_column(BigInteger)
@@ -81,7 +84,6 @@ class Payout(Base):
     user_id: Mapped[user_fk]
     amount: Mapped[float] = mapped_column(Float)
     wallet: Mapped[str]
-    # ВОЗВРАЩАЕМ PgEnum
     status: Mapped[PayoutStatus] = mapped_column(
         PgEnum(PayoutStatus, name="payout_status_enum"), 
         default=PayoutStatus.PENDING, 
@@ -92,3 +94,18 @@ class Payout(Base):
     created_at: Mapped[created_at]
     processed_at: Mapped[processed_at]
     user: Mapped["User"] = relationship(back_populates="payouts")
+
+# --- НОВАЯ ТАБЛИЦА ДЛЯ ЛОГОВ ---
+class ActionLog(Base):
+    __tablename__ = "action_logs"
+
+    id: Mapped[int_pk]
+    # Кто совершил действие (Telegram ID)
+    actor_tg_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    # Username того, кто совершил (для удобства чтения в таблице)
+    actor_username: Mapped[str | None]
+    # Тип действия (например, "BAN_USER", "PAYOUT_CONFIRM", "START_BOT")
+    action: Mapped[str] = mapped_column(String(50), index=True)
+    # Детали (JSON или текст, например "Забанил ID 12345")
+    details: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[created_at]

@@ -1,11 +1,13 @@
 # bot/db/repository.py
 
+import datetime
 from typing import Dict, Any
-from sqlalchemy import select, update, func, delete
+from sqlalchemy import select, update, func, delete, or_, and_, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from bot.db.models import User, Video, VideoHistory, VideoStatus, Payout, PayoutStatus
+# Импортируем ActionLog и другие модели
+from bot.db.models import User, Video, VideoHistory, VideoStatus, Payout, PayoutStatus, ActionLog
 
 
 class Repository:
@@ -46,18 +48,77 @@ class Repository:
         stmt = update(User).where(User.id == user_id).values(is_banned=False)
         await self.session.execute(stmt)
 
+    # --- Admin Management ---
+    async def set_admin_status(self, user_id: int, is_admin: bool) -> None:
+        """Назначает или снимает права админа."""
+        stmt = update(User).where(User.id == user_id).values(is_admin=is_admin)
+        await self.session.execute(stmt)
+
+    async def get_all_admins(self) -> list[User]:
+        """Возвращает список всех админов из БД."""
+        query = select(User).where(User.is_admin == True)
+        result = await self.session.execute(query)
+        return result.scalars().all()
+
     # --- Методы для работы с видео (Video) ---
 
     async def add_video_to_queue(self, user_id: int, link: str) -> Video:
         new_video = Video(user_id=user_id, link=link)
         self.session.add(new_video)
         return new_video
-
-    async def get_oldest_video_from_queue(self) -> Video | None:
-        query = select(Video).options(selectinload(Video.user)).order_by(Video.created_at.asc()).limit(1)
-        result = await self.session.execute(query)
-        return result.scalar_one_or_none()
     
+    async def get_video_for_review(self, admin_tg_id: int, lock_timeout_minutes: int = 15) -> Video | None:
+        """
+        Ищет старейшее видео, которое свободно или чей замок истек,
+        и атомарно блокирует его за admin_tg_id.
+        """
+        now = datetime.datetime.now()
+        timeout_threshold = now - datetime.timedelta(minutes=lock_timeout_minutes)
+        
+        # 1. Находим ID подходящего видео (свободно ИЛИ таймаут)
+        subquery = (
+            select(Video.id)
+            .where(
+                or_(
+                    Video.locked_by_admin_id.is_(None),
+                    Video.locked_at < timeout_threshold
+                )
+            )
+            .order_by(Video.created_at.asc())
+            .limit(1)
+            .with_for_update(skip_locked=True) 
+            .scalar_subquery()
+        )
+
+        # 2. Атомарно обновляем это видео (ставим свой замок)
+        stmt = (
+            update(Video)
+            .where(Video.id == subquery)
+            .values(
+                locked_by_admin_id=admin_tg_id,
+                locked_at=now
+            )
+            .returning(Video)
+        )
+        
+        result = await self.session.execute(stmt)
+        video = result.scalar_one_or_none()
+        
+        if video:
+            # Подгружаем юзера, так как returning вернул только видео
+            await self.session.refresh(video, ["user"])
+            
+        return video
+
+    async def unlock_video(self, video_id: int) -> None:
+        """Снимает блокировку с видео."""
+        stmt = (
+            update(Video)
+            .where(Video.id == video_id)
+            .values(locked_by_admin_id=None, locked_at=None)
+        )
+        await self.session.execute(stmt)
+
     async def get_queue_count(self) -> int:
         query = select(func.count(Video.id))
         result = await self.session.execute(query)
@@ -66,8 +127,10 @@ class Repository:
     async def process_video_acceptance(self, video_id: int, admin_tg_id: int, amount: float) -> Video:
         video_to_process = await self.session.get(Video, video_id, options=[selectinload(Video.user)])
         if not video_to_process: raise ValueError("Video not found")
+        
         user_update_stmt = update(User).where(User.id == video_to_process.user_id).values(balance=User.balance + amount)
         await self.session.execute(user_update_stmt)
+        
         history_record = VideoHistory(user_id=video_to_process.user_id, link=video_to_process.link, status=VideoStatus.ACCEPTED, admin_tg_id=admin_tg_id, created_at=video_to_process.created_at)
         self.session.add(history_record)
         await self.session.delete(video_to_process)
@@ -76,6 +139,7 @@ class Repository:
     async def process_video_rejection(self, video_id: int, admin_tg_id: int, reason: str) -> Video:
         video_to_process = await self.session.get(Video, video_id, options=[selectinload(Video.user)])
         if not video_to_process: raise ValueError("Video not found")
+        
         history_record = VideoHistory(user_id=video_to_process.user_id, link=video_to_process.link, status=VideoStatus.REJECTED, reason=reason, admin_tg_id=admin_tg_id, created_at=video_to_process.created_at)
         self.session.add(history_record)
         await self.session.delete(video_to_process)
@@ -150,9 +214,7 @@ class Repository:
             "total_paid_amount": total_paid_amount or 0.0,
         }
     
-    # --- НОВЫЙ МЕТОД ---
     async def get_admin_stats(self, admin_tg_id: int) -> Dict[str, Any]:
-        """Получает статистику по конкретному администратору."""
         videos_processed_query = select(func.count(VideoHistory.id)).where(VideoHistory.admin_tg_id == admin_tg_id)
         payouts_confirmed_query = select(func.count(Payout.id)).where(
             Payout.admin_tg_id == admin_tg_id,
@@ -166,22 +228,27 @@ class Repository:
             "videos_processed": videos_processed or 0,
             "payouts_confirmed": payouts_confirmed or 0,
         }
-    # ------------------
     
     async def has_pending_payout(self, user_id: int) -> bool:
-        """Проверяет, есть ли у пользователя активная заявка на вывод."""
         query = select(Payout.id).where(Payout.user_id == user_id, Payout.status == PayoutStatus.PENDING).limit(1)
         result = await self.session.execute(query)
         return result.scalar_one_or_none() is not None
 
-    # --- Admin Management ---
-    async def set_admin_status(self, user_id: int, is_admin: bool) -> None:
-        """Назначает или снимает права админа."""
-        stmt = update(User).where(User.id == user_id).values(is_admin=is_admin)
-        await self.session.execute(stmt)
+    # --- LOGGING METHODS (НОВЫЕ) ---
+    
+    async def log_action(self, actor_tg_id: int, action: str, details: str = None, actor_username: str = None) -> None:
+        """Записывает действие в лог."""
+        log_entry = ActionLog(
+            actor_tg_id=actor_tg_id,
+            actor_username=actor_username,
+            action=action,
+            details=details
+        )
+        self.session.add(log_entry)
+        # Обычно коммит делается в хендлере
 
-    async def get_all_admins(self) -> list[User]:
-        """Возвращает список всех админов из БД."""
-        query = select(User).where(User.is_admin == True)
+    async def get_all_logs(self) -> list[ActionLog]:
+        """Возвращает все логи, отсортированные по новизне."""
+        query = select(ActionLog).order_by(desc(ActionLog.created_at))
         result = await self.session.execute(query)
         return result.scalars().all()

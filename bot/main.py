@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import os
 import sys
 from functools import partial
 
@@ -17,12 +16,12 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from bot.config import config
 from bot.db.models import Base
 from bot.middlewares.ban_check import BanCheckMiddleware
-
-# --- ИЗМЕНЕНИЕ 1: Импортируем новый роутер ---
 from bot.handlers.admin_handlers import admin_router
-from bot.handlers.super_admin_handlers import super_admin_router # <--- ВОТ ЭТОГО НЕ ХВАТАЛО
+from bot.handlers.super_admin_handlers import super_admin_router 
 from bot.handlers.user_handlers import user_router
-# ---------------------------------------------
+
+from bot.services.notification_service import notification_worker
+
 
 async def on_startup(bot: Bot, engine) -> None:
     logging.info("Warming up database connection pool...")
@@ -90,6 +89,13 @@ def main() -> None:
     # 3. В конце Юзер (все, кто не попал выше)
     dp.include_router(user_router)
     # --------------------------------------------------------------
+
+    async def start_worker():
+    # Отправляем в фон и НЕ ждем (await)
+        asyncio.create_task(notification_worker(bot, session_maker))
+        
+    # Регистрируем обертку
+    dp.startup.register(start_worker)
     
     app = web.Application()
     
